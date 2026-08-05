@@ -1,8 +1,8 @@
 services:
   deepseek-v4-flash:
-    build:
-      context: .
-    image: deepseek-v4-flash-0731-spark-sparkinfer:sm121
+    image: ghcr.io/0xsero/deepseek-v4-flash-0731-spark-sparkinfer:dspark-k64-fixed-k5
+    pull_policy: always
+    restart: unless-stopped
     network_mode: host
     ipc: host
     shm_size: 16gb
@@ -22,6 +22,7 @@ services:
       DSPARK_STRUCTURED_EXPERTS_PER_CATEGORY: "32"
       VLLM_USE_B12X_WO_PROJECTION: "1"
       GPU_MEMORY_UTILIZATION: "0.9465"
+      VERIFY_MODEL_CHECKSUMS: "1"
     volumes:
       - ./data:/models
       - ./cache:/cache

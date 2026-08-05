@@ -1,0 +1,49 @@
+{
+  "date": "2026-08-05",
+  "hardware": "NVIDIA DGX Spark, one GB10 GPU, SM121",
+  "source_commit": "bcdc291794fccbb4b46125172ef4ba025bf484c2",
+  "local_image_id": "sha256:08b1c7bbbbd3d395808810b933e05dc1997f4dbec61a858eca3467f0d5f299c5",
+  "profile": "K64 DSpark, fixed K5, probabilistic draft, thinking=false",
+  "checksums": {
+    "enabled": true,
+    "tensor_files": 48,
+    "tensor_bytes": 106096777512
+  },
+  "runtime": {
+    "weights_loaded_gib": 95.39,
+    "max_model_len": 262144,
+    "kv_cache_gib": 8.01,
+    "kv_cache_tokens": 264867,
+    "max_concurrency_at_262144": 1.01,
+    "cuda_graph_mode": "FULL_AND_PIECEWISE",
+    "eager_execution": false,
+    "restart_count": 0,
+    "health": "pass"
+  },
+  "correctness": {
+    "semantic": {"status": "pass", "text": "17 × 19 = 323"},
+    "structured_json_schema": {
+      "status": "pass",
+      "parsed": {"language": "Python", "answer": 323, "valid": true}
+    }
+  },
+  "code_c1_decode": {
+    "completion_tokens_per_trial": 512,
+    "trials_tok_s": [
+      {"language": "python", "tok_s": 38.120442042728236},
+      {"language": "rust", "tok_s": 34.300642793857826},
+      {"language": "typescript", "tok_s": 48.88093198166259},
+      {"language": "cuda_cpp", "tok_s": 37.76771551461618},
+      {"language": "go", "tok_s": 38.396644638085576}
+    ],
+    "minimum_tok_s": 34.300642793857826,
+    "median_tok_s": 38.120442042728236,
+    "mean_tok_s": 39.493275394190086,
+    "gate_tok_s": 35.0,
+    "gate": "fail"
+  },
+  "cold_c1_prefill": {
+    "status": "clean-image-rerun-pending",
+    "candidate_same_path_tok_s": 1055.449851700873
+  }
+}

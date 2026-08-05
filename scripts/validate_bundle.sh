@@ -8,6 +8,7 @@ sparkinfer_source=${2:-}
 bash -n "${repo_root}/scripts/entrypoint.sh" \
   "${repo_root}/scripts/healthcheck.sh"
 python3 -m py_compile \
+  "${repo_root}/scripts/acceptance_c1.py" \
   "${repo_root}/scripts/benchmark.py" \
   "${repo_root}/scripts/build_dspark_draft.py" \
   "${repo_root}/scripts/coalesce_rank_sliced_exl3.py" \

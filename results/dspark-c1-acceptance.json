@@ -1,0 +1,83 @@
+{
+  "date": "2026-08-05",
+  "hardware": "NVIDIA DGX Spark, one GB10 GPU, SM121, 119.69 GiB unified memory",
+  "model": "0xSero/deepseek-v4-flash-0731-spark",
+  "model_revision": "22f28d32b9b29b4352eaa380ff8c2c170b2847ab",
+  "served_model_name": "deepseek-v4-flash-0731-spark",
+  "profile": "fixed K5 DSpark plus B12X WO, thinking=false",
+  "target": {
+    "experts": 216,
+    "weights_loaded_gib": 95.39,
+    "max_model_len": 262144
+  },
+  "draft": {
+    "experts": 64,
+    "structured_experts_per_category": 32,
+    "num_speculative_tokens": 5,
+    "sample_method": "probabilistic",
+    "sha256": "d72dd9d92abe2cfd2d90931072ae3b920a8f0be09465a88c839072a16d7e5cd5",
+    "dynamic_depth": false,
+    "reason_dynamic_depth_is_disabled": "strict JSON-schema requests crashed the pinned vLLM grammar-mask path under dynamic DSpark; fixed K5 passed"
+  },
+  "runtime": {
+    "tensor_parallel_size": 1,
+    "max_num_seqs": 4,
+    "max_num_batched_tokens": 8224,
+    "gpu_memory_utilization": 0.9465,
+    "kv_cache_dtype": "nvfp4_ds_mla",
+    "kv_physical_format": "584-byte padded FP8 compatibility record",
+    "kv_cache_gib": 8.09,
+    "kv_cache_tokens": 267623,
+    "max_concurrency_at_262144": 1.02,
+    "cuda_graph_mode": "FULL_AND_PIECEWISE",
+    "cuda_graph_capture_sizes": [6],
+    "cuda_graph_memory_gib": 0.19,
+    "eager_execution": false,
+    "b12x_wo_projection": true,
+    "thinking_default": false
+  },
+  "code_c1_decode": {
+    "definition": "(completion_tokens - 1) / (last token time - first token time)",
+    "completion_tokens_per_trial": 512,
+    "trials_tok_s": [
+      37.304809407015725,
+      35.76447765155709,
+      45.74900294211174,
+      40.86963382593325,
+      35.43951317697162
+    ],
+    "minimum_tok_s": 35.43951317697162,
+    "median_tok_s": 37.304809407015725,
+    "mean_tok_s": 39.025487400717886,
+    "gate_tok_s": 35.0,
+    "gate": "pass"
+  },
+  "cold_c1_prefill": {
+    "prompt_tokens": 252047,
+    "cached_tokens": 0,
+    "ttft_s": 238.80528249999043,
+    "tok_s": 1055.449851700873,
+    "response": "PREFILL OK.",
+    "gate_tok_s": 1000.0,
+    "gate": "pass",
+    "note": "measured on the same target, K64 draft, B12X WO, 8224-token prefill profile; DSpark capacity controls do not execute during prefill"
+  },
+  "correctness": {
+    "semantic_python": "pass",
+    "structured_json_schema": {
+      "status": "pass",
+      "parsed": {
+        "language": "Python",
+        "answer": 323,
+        "valid": true
+      }
+    }
+  },
+  "thermal_soak": {
+    "workload": "252047-token cold prefill",
+    "peak_temperature_c": 89.0,
+    "peak_power_w": 76.67,
+    "minimum_sm_clock_mhz": 2151.0,
+    "samples": 48
+  }
+}

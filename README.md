@@ -2,7 +2,7 @@
 
 A pinned Docker recipe for serving [`0xSero/deepseek-v4-flash-0731-spark`](https://huggingface.co/0xSero/deepseek-v4-flash-0731-spark) on **one NVIDIA DGX Spark** with [Local Inference Lab's SparkInfer](https://github.com/local-inference-lab/sparkinfer).
 
-The validated configuration exposes a 262,144-token model limit, captures CUDA graphs for C1/C2/C4, and preserves the model's EXL3/Trellis weights. Real text generation and JSON-schema structured output both passed on a physical GB10/SM121 Spark.
+The validated configuration exposes a 262,144-token model limit and uses a compact K64 DSpark speculative draft with fixed K5 verification. The target's EXL3/Trellis weights and all 216 target experts remain untouched. Real code generation and strict JSON-schema structured output both passed on a physical GB10/SM121 Spark.
 
 > **Important KV-format disclosure:** the reliable single-Spark route uses a 584-byte padded FP8 sparse-MLA record under the `nvfp4_ds_mla` control path. It is **not** a true 432-byte NVFP4 KV record. The true 432-byte implementation boots and passes its isolated numerical oracle, but produced corrupted full-model text and is therefore disabled in the serving recipe. This follows the conservative compatibility envelope documented by the [MiaAI-Lab DSpark work](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark).
 
@@ -24,22 +24,25 @@ This image is intentionally specific to Linux aarch64 and GB10/SM121. It exits o
 - model revision `22f28d32b9b29b4352eaa380ff8c2c170b2847ab`
 - PyTorch `2.12.0+cu130`; CUTLASS DSL `4.6.0`; Transformers `5.13.1`; Mistral Common `1.11.5`; InstantTensor `0.1.5`; OpenAI `2.44.0`; compressed-tensors `0.17.0`; TileLang `0.1.9`; quack-kernels `0.6.2`; Ninja `1.13.0`
 - TP1; 262,144-token limit; four scheduled sequences
-- `FULL_AND_PIECEWISE` CUDA graphs at batch sizes 1, 2, and 4
+- fixed K5 DSpark with a 64-expert draft selected from preserved REAP rankings
+- `FULL_AND_PIECEWISE` CUDA graph for the six-row C1 verifier shape
+- B12X fused attention output projection
+- non-reasoning mode by default for the measured speed profile; callers can opt into thinking per request
 - 584-byte padded FP8 sparse-MLA compatibility record
 
 The patch files are readable source patches. Docker verifies that each patch applies to its pinned upstream commit before compiling the required vLLM extension. The build-only patch makes pinned fetches shallow and skips optional external packages when compiling the single required extension; it does not change runtime kernels. The InstantTensor patch preserves scalar tensor shapes and clones each view before its reusable loader buffer advances; this is the exact correction exercised by the validated development runtime.
 
 ## Run
 
-Install current NVIDIA drivers, Docker, the NVIDIA Container Toolkit, and Docker Compose on the Spark. The first run downloads about 107 GB of source weights, losslessly coalesces the rank-sliced EXL3 archive to TP1, verifies checksums, runs a low-level SparkInfer CUDA-graph self-test, and starts the OpenAI-compatible server.
+Install current NVIDIA drivers, Docker, the NVIDIA Container Toolkit, and Docker Compose on the Spark. The first run pulls the pinned GB10 image, downloads about 107 GB of source weights, losslessly coalesces the rank-sliced EXL3 archive to TP1, verifies checksums, constructs and validates the 3.0 GB K64 DSpark draft, runs a low-level SparkInfer CUDA-graph self-test, and starts the OpenAI-compatible server. The source target is never modified.
+
+One command performs the complete install and launch:
 
 ```bash
-git clone https://github.com/0xSero/deepseek-v4-flash-0731-spark-sparkinfer.git
-cd deepseek-v4-flash-0731-spark-sparkinfer
-docker compose build
-docker compose up -d
-docker compose logs -f
+git clone https://github.com/0xSero/deepseek-v4-flash-0731-spark-sparkinfer.git && cd deepseek-v4-flash-0731-spark-sparkinfer && docker compose up -d
 ```
+
+Follow startup with `docker compose logs -f`. Model data and compiled caches persist under `./data` and `./cache`, so restarts do not redownload or rebuild valid artifacts. To build the pinned source image locally instead of pulling GHCR, run `docker build -t deepseek-v4-flash-0731-spark-sparkinfer:local .`.
 
 For a gated model, place `HF_TOKEN=...` in a local `.env`; it is ignored by Git. Model data and build caches remain in `./data` and `./cache`.
 
@@ -64,21 +67,23 @@ curl -sS http://127.0.0.1:8000/v1/chat/completions \
 
 ## Measured performance
 
-The acceptance run used a 3,589-token prompt and up to 128 completion tokens. C2 and C4 reused the same prompt, so prefix caching warmed those runs; their TTFT/prefill figures are not cold-prefill results.
+The clean repository-built image passed checksum verification, real generation, strict JSON schema, 262,144-token capacity, and FULL/PIECEWISE CUDA-graph capture. Five independent 512-token code generations ran at C1 with `thinking=false`; decode excludes TTFT and the first generated token.
 
-| Concurrency | Aggregate decode | Mean per-request decode | TTFT p50 | Mean prefill |
-|---:|---:|---:|---:|---:|
-| C1 | 18.94 tok/s | 18.94 tok/s | 7.129 s | 503.44 tok/s |
-| C2 | 31.52 tok/s | 17.90 tok/s | 0.344 s | 10,422.45 tok/s |
-| C4 | 63.70 tok/s | 16.17 tok/s | 0.976 s | 3,683.31 tok/s |
+| Surface | Result | Gate |
+|---|---:|---:|
+| Clean-image C1 code decode minimum | 34.30 tok/s | >=35 tok/s: **pending** |
+| Clean-image C1 code decode median | 38.12 tok/s | informational |
+| Clean-image C1 code decode mean | 39.49 tok/s | informational |
+| Same-path tuning run, cold 252,047-token prefill | 1,055.45 tok/s | clean-image rerun pending |
 
-The requested 35–50 tok/s single-stream target was **not** reached. The exact published image measured 18.94 tok/s at C1. MTP speculative decoding was tested but cannot load because this quantized artifact omits the model's layer-43 MTP tensors, so the recipe fails closed without MTP rather than fabricating that speed claim.
+The clean-image trials were `38.12`, `34.30`, `48.88`, `37.77`, and `38.40` tok/s. The image is publishable as a correct reproducible runtime, but the requested steady 35 tok/s floor is still an open optimization gate and is not claimed as complete. A prior same-path cold-prefill run returned the expected `PREFILL OK.` response at 1,055.45 tok/s with zero cached prompt tokens; it remains tuning evidence until repeated on the final published image.
+
+Dynamic K1–K5 depth was also tested and was faster on some prompts, but a strict JSON-schema request exposed a grammar-mask assertion in the pinned vLLM runtime. It is disabled in the published profile. Fixed K5 passes correctness and structured output; further decode tuning continues separately.
 
 Run the same benchmark:
 
 ```bash
-python3 scripts/benchmark.py --prompt-repetitions 256 --output-tokens 128 \
-  | tee results/local-c1-c2-c4.json
+python3 scripts/acceptance_c1.py --skip-prefill
 ```
 
 See [`VALIDATION.md`](VALIDATION.md) and the committed files under `results/` for full evidence. Performance depends on prompt shape, prefix-cache state, thermals, and clocks.
@@ -87,11 +92,12 @@ See [`VALIDATION.md`](VALIDATION.md) and the committed files under `results/` fo
 
 The serving route:
 
-1. keeps the EXL3/Trellis weight payload intact while coalescing rank-sliced files to TP1;
-2. stores each sparse-MLA token in the proven 584-byte padded FP8 record;
-3. routes compressed decode and multi-group prefill through SparkInfer;
-4. uses real CUDA graphs for C1, C2, and C4;
-5. verifies the model manifest before launch.
+1. keeps the EXL3/Trellis target payload and all 216 target experts intact while coalescing rank-sliced files to TP1;
+2. derives a separate 64-expert DSpark draft from the saved REAP rankings, with both structured-output calibration categories represented;
+3. stores each sparse-MLA token in the proven 584-byte padded FP8 record;
+4. routes compressed decode and multi-group prefill through SparkInfer, with B12X fused output projection;
+5. uses a real FULL CUDA graph for fixed K5 C1 verification and PIECEWISE graphs elsewhere;
+6. verifies the model manifest and draft tensor shapes before launch.
 
 `scripts/selftest.py` separately exercises the experimental 432-byte writer against a dequantized PyTorch oracle and through a CUDA graph. That is a useful kernel regression test, but it is not a claim that the 432-byte format passes full-model generation. The server-level semantic and structured-output tests are the authoritative gates.
 
