@@ -1,0 +1,15 @@
+{
+  "date": "2026-08-05",
+  "hardware": "NVIDIA DGX Spark, one GB10 GPU, SM121",
+  "image": "ghcr.io/0xsero/deepseek-v4-flash-0731-spark-sparkinfer:dspark-k64-fixed-k5",
+  "profile": "K64 DSpark, fixed K5, probabilistic draft, thinking=false",
+  "method": "Exact beginning, middle, and end fact plus checksum recovery through strict JSON schema",
+  "results": [
+    {"characters": 500, "prompt_tokens": 116, "completion_tokens": 49, "elapsed_s": 9.800433321994205, "finish_reason": "stop", "status": "pass"},
+    {"characters": 2000, "prompt_tokens": 384, "completion_tokens": 53, "elapsed_s": 3.788580542001, "finish_reason": "stop", "status": "pass"},
+    {"characters": 5000, "prompt_tokens": 910, "completion_tokens": 53, "elapsed_s": 4.332907730997249, "finish_reason": "stop", "status": "pass"},
+    {"characters": 10000, "prompt_tokens": 1782, "completion_tokens": 53, "elapsed_s": 3.7970066369962296, "finish_reason": "stop", "status": "pass"},
+    {"characters": 20000, "prompt_tokens": 3532, "completion_tokens": 53, "elapsed_s": 6.282699313000194, "finish_reason": "stop", "status": "pass"}
+  ],
+  "gate": "pass"
+}

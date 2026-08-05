@@ -15,13 +15,14 @@ Acceptance is fail-closed and each surface is recorded separately. The evidence 
 | CUDA graphs | Pass | `FULL_AND_PIECEWISE`; fixed K5 verifier capture size 6; eager execution disabled |
 | Semantic generation | Pass | Deterministic arithmetic returned the correct result `17 × 19 = 323` |
 | JSON-schema output | Pass | Exact parsed object `{"language":"Python","answer":323,"valid":true}` |
+| 500–20,000-character coherence | Pass | Exact beginning/middle/end fact and checksum recovery at 500, 2k, 5k, 10k, and 20k characters; strict schema and `stop` at every size |
 | C1 code decode | **Optimization pending** | Five 512-token clean-image trials; minimum 34.30, median 38.12, mean 39.49 tok/s |
 | Cold C1 prefill | Candidate pass; release rerun pending | Same runtime path measured 252,047 uncached tokens at 1,055.45 tok/s before clean packaging |
 | Thermals | Candidate pass | 89 C peak, 76.67 W peak, 2,151 MHz minimum SM clock during the prior 252k cold-prefill window |
 | Dynamic draft depth | **Rejected** | A strict JSON-schema request hit a grammar-mask cardinality assertion; the published profile uses fixed K5 |
 | Experimental 432-byte full generation | **Rejected** | The server booted but generated corrupted text; this route is disabled |
 
-The machine-readable clean-image record is [`results/clean-image-acceptance.json`](results/clean-image-acceptance.json). [`results/dspark-c1-acceptance.json`](results/dspark-c1-acceptance.json) is the earlier tuning candidate. The older `acceptance.json`, `c1-c2-c4.json`, and thermal CSV record the original non-speculative baseline and are retained as provenance, not current release claims.
+The machine-readable clean-image records are [`results/clean-image-acceptance.json`](results/clean-image-acceptance.json) and [`results/context-coherence.json`](results/context-coherence.json). [`results/dspark-c1-acceptance.json`](results/dspark-c1-acceptance.json) is the earlier tuning candidate. The older `acceptance.json`, `c1-c2-c4.json`, and thermal CSV record the original non-speculative baseline and are retained as provenance, not current release claims.
 
 ## Performance gate
 

@@ -5,6 +5,7 @@ results/*
 !results/acceptance.json
 !results/c1-c2-c4.json
 !results/clean-image-acceptance.json
+!results/context-coherence.json
 !results/dspark-c1-acceptance.json
 !results/thermals-c1-c2-c4.csv
 data/

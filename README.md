@@ -88,6 +88,24 @@ python3 scripts/acceptance_c1.py --skip-prefill
 
 See [`VALIDATION.md`](VALIDATION.md) and the committed files under `results/` for full evidence. Performance depends on prompt shape, prefix-cache state, thermals, and clocks.
 
+## Context coherence
+
+The final-image default profile was tested at exact message-content lengths from 500 through 20,000 characters. Every request had distinct facts at the beginning, middle, and end plus an arithmetic checksum; the server had to return all four through a strict JSON schema.
+
+| Context characters | Prompt tokens | Result | End-to-end time |
+|---:|---:|---:|---:|
+| 500 | 116 | Pass | 9.80 s |
+| 2,000 | 384 | Pass | 3.79 s |
+| 5,000 | 910 | Pass | 4.33 s |
+| 10,000 | 1,782 | Pass | 3.80 s |
+| 20,000 | 3,532 | Pass | 6.28 s |
+
+All five responses preserved the exact beginning/middle/end values, checksum, schema, and `stop` finish reason. This demonstrates coherent fact retention and structured generation across the requested character range; it is not a claim that every possible reasoning workload at those lengths is error-free. Reproduce it with:
+
+```bash
+python3 scripts/context_coherence.py
+```
+
 ## Runtime implementation
 
 The serving route:
