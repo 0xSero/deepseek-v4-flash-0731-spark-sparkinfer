@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
 .env
-results/
+results/*
+!results/acceptance.json
+!results/c1-c2-c4.json
+!results/thermals-c1-c2-c4.csv
 data/
 cache/

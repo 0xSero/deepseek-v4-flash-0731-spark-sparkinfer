@@ -1,16 +1,34 @@
 # Validation evidence
 
-Acceptance is fail-closed. A check is marked complete only when observed on a physical one-GPU DGX Spark (GB10, SM121).
+Acceptance is fail-closed and each surface is recorded separately. The evidence below was observed on one physical DGX Spark with a GB10 GPU (SM121) on 2026-08-05.
 
 | Surface | Status | Evidence |
 |---|---:|---|
-| NVFP4 record writer | Pass | 432-byte record; reserved bytes zero |
-| SparkInfer numerical oracle | Pass | C1 cosine 0.999997735; C16 cosine 0.999997914 |
-| CUDA-graph replay | Pass | C1 and C16 maximum replay delta 0.0 |
-| Exact 262,144-token server configuration | Pending | Awaiting final full-service run |
-| Post-capture KV capacity | Pending | Awaiting final full-service run |
-| Real text generation | Pending | Awaiting final full-service run |
-| JSON-schema structured output | Pending | Awaiting final full-service run |
-| C1/C2/C4 benchmark | Pending | Awaiting final full-service run |
+| Model identity | Pass | HF revision `22f28d32b9b29b4352eaa380ff8c2c170b2847ab`; served name `deepseek-v4-flash-0731-spark` |
+| Weight load | Pass | 92.13 GiB reported after load; TP1 EXL3 manifest checks passed |
+| Exact model limit | Pass | `max_model_len=262144`, `max_num_seqs=4` |
+| Post-capture KV capacity | Pass | 12.32 GiB available; 427,223 GPU KV tokens; 1.63x maximum concurrency at 262,144 tokens |
+| CUDA graphs | Pass | `FULL_AND_PIECEWISE`; FULL and PIECEWISE captures for C1/C2/C4 |
+| Real generation | Pass | Deterministic prompt returned `The capital of France is Paris.` with finish reason `stop` |
+| JSON-schema output | Pass | Exact parsed object `{"city":"Paris","country":"France"}` with finish reason `stop` |
+| C1/C2/C4 benchmark | Pass | 20.53 / 33.50 / 61.38 aggregate decode tok/s; full JSON committed |
+| Thermals | Pass | 68 C peak, 96% peak utilization during the captured benchmark window |
+| Experimental 432-byte writer oracle | Pass, diagnostic only | C1 cosine 0.999997735; C16 cosine 0.999997914; CUDA-graph replay delta 0.0 |
+| Experimental 432-byte full generation | **Fail** | Server booted but generated corrupted text; this route is disabled |
+| MTP speculative decode | **Unavailable** | Artifact lacks `model.layers.43.mtp_block.main_norm.weight` and related MTP payload |
 
-The pending rows must not be interpreted as runtime support claims. They will be updated with the captured server log and benchmark JSON after the live run passes.
+## KV-format interpretation
+
+The production recipe exports `KV_CACHE_DTYPE=nvfp4_ds_mla` to select the SparkInfer sparse-MLA control path, plus `VLLM_DSV4_PADDED_NVFP4=1` to select the proven 584-byte FP8 physical record. The name of the control path must not be read as a claim that the physical cache is true NVFP4.
+
+The 432-byte E2M1 implementation remains available for low-level research and passes its isolated numerical test, but a kernel oracle is not full-model acceptance. It is excluded from the default Docker entrypoint because semantic generation failed.
+
+## Performance notes
+
+The committed C1/C2/C4 run used the same 3,589-token prompt at every concurrency. C1 was the cold run. C2 and C4 benefited from prefix caching, which explains their much lower TTFT and higher calculated prefill rate. Decode throughput is the useful comparison surface:
+
+- C1: 20.53 aggregate tok/s; 20.53 tok/s per request.
+- C2: 33.50 aggregate tok/s; 17.21 tok/s mean per request.
+- C4: 61.38 aggregate tok/s; 16.11 tok/s mean per request.
+
+This does not meet a 35–50 tok/s single-stream expectation. The repo reports the measured result rather than translating aggregate C2/C4 throughput into a C1 claim.
