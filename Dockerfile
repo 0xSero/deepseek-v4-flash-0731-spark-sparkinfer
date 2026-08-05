@@ -77,6 +77,22 @@ RUN export PATH=/usr/local/bin:${PATH} && \
     cp /opt/vllm-build/_C_stable_libtorch.abi3.so \
       /opt/vllm/vllm/_C_stable_libtorch.abi3.so
 
+# The CuTeDSL indexer imports FA4's Python utilities at runtime. Fetch only the
+# exact upstream Python source and perform the same package rewrite as vLLM's
+# _vllm_fa4_cutedsl_C install component; no extra attention extension is built.
+RUN git init /tmp/vllm-flash-attn && \
+    git -C /tmp/vllm-flash-attn remote add origin \
+      https://github.com/vllm-project/flash-attention.git && \
+    git -C /tmp/vllm-flash-attn fetch --depth=1 origin \
+      caaa4eb59845388a20b1f435ecaafb4bd9517ad8 && \
+    git -C /tmp/vllm-flash-attn checkout --detach FETCH_HEAD && \
+    mkdir -p /opt/vllm/vllm/vllm_flash_attn/cute && \
+    cp -a /tmp/vllm-flash-attn/flash_attn/cute/. \
+      /opt/vllm/vllm/vllm_flash_attn/cute/ && \
+    find /opt/vllm/vllm/vllm_flash_attn/cute -type f -name '*.py' \
+      -exec sed -i 's/flash_attn\.cute/vllm.vllm_flash_attn.cute/g' {} + && \
+    rm -rf /tmp/vllm-flash-attn
+
 RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       'nvidia-cutlass-dsl-libs-cu13==4.6.0' 'transformers==5.13.1' \
       'mistral-common==1.11.5' 'instanttensor==0.1.5' 'openai==2.44.0' \
