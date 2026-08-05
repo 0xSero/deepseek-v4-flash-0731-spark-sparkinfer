@@ -1,0 +1,23 @@
+{
+  "hardware": "NVIDIA DGX Spark, one GB10 GPU, SM121, 128 GB unified memory",
+  "model": "0xSero/deepseek-v4-flash-0731-spark",
+  "model_revision": "22f28d32b9b29b4352eaa380ff8c2c170b2847ab",
+  "served_model_name": "deepseek-v4-flash-0731-spark",
+  "tensor_parallel_size": 1,
+  "max_model_len": 262144,
+  "max_num_seqs": 4,
+  "max_num_batched_tokens": 8192,
+  "kv_cache_dtype": "nvfp4_ds_mla",
+  "kv_record_bytes": 432,
+  "cuda_graph_mode": "FULL_AND_PIECEWISE",
+  "cuda_graph_capture_sizes": [1, 2, 4],
+  "eager_execution": false,
+  "runtime": {
+    "base_image": "nvcr.io/nvidia/vllm:26.02-py3",
+    "vllm_commit": "30038602b71395f481ef4a6edfe4fcf8551d9c15",
+    "sparkinfer_commit": "272a84bd97ce791a1e92d1f3a0da3dd5f3c6565f",
+    "torch": "2.12.0+cu130",
+    "nvidia_cutlass_dsl": "4.6.0"
+  }
+}
+

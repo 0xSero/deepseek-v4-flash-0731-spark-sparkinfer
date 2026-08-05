@@ -1,0 +1,475 @@
+diff --git a/sparkinfer/attention/_shared/mla/compressed_api.py b/sparkinfer/attention/_shared/mla/compressed_api.py
+index ba7e57736b70f4d97ed95289ceb74b159e37a4f6..a6fd812e2b18e3bdd478bced862effd3b62461d6 100644
+--- a/sparkinfer/attention/_shared/mla/compressed_api.py
++++ b/sparkinfer/attention/_shared/mla/compressed_api.py
+@@ -18,8 +18,10 @@ from .compressed_config import (
+ from .compressed_reference import (
+     COMPRESSED_MLA_DSV4_PAGE_SIZE,
+     COMPRESSED_MLA_HEAD_DIM,
++    compressed_mla_nvfp4_page_nbytes,
+     compressed_mla_page_nbytes,
+ )
++from .traits import ScaleFormat
+ 
+ 
+ _LN2 = math.log(2.0)
+@@ -71,6 +73,10 @@ def compressed_mla_decode_forward(
+     lse_scale: Literal["base2", "natural"] = "base2",
+     backend: str | None = None,
+     out: torch.Tensor | None = None,
++    scale_format: int | None = None,
++    latent_scale: float = 1.0,
++    fp8_rope: bool | None = None,
++    latent_scale_per_token: bool = False,
+ ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+     """Run compressed sparse MLA decode directly from compressed KV pages.
+ 
+@@ -133,6 +139,7 @@ def compressed_mla_decode_forward(
+         swa_k_cache,
+         page_size=swa_page_size,
+         name="swa_k_cache",
++        scale_format=scale_format,
+     )
+ 
+     swa_indices_2d = _normalize_index_matrix(swa_indices, name="swa_indices")
+@@ -178,6 +185,7 @@ def compressed_mla_decode_forward(
+             indexed_k_cache,
+             page_size=int(indexed_page_size),
+             name="indexed_k_cache",
++            scale_format=scale_format,
+         )
+         indexed_indices_2d = _normalize_index_matrix(
+             indexed_indices, name="indexed_indices"
+@@ -245,6 +253,10 @@ def compressed_mla_decode_forward(
+             return_lse=return_lse,
+             lse_scale=lse_scale,
+             out=out,
++            scale_format=scale_format,
++            latent_scale=latent_scale,
++            fp8_rope=fp8_rope,
++            latent_scale_per_token=latent_scale_per_token,
+         )
+ 
+     if _should_use_sm121_single_pass_decode(
+@@ -271,6 +283,10 @@ def compressed_mla_decode_forward(
+             return_lse=return_lse,
+             lse_scale=lse_scale,
+             out=out,
++            scale_format=scale_format,
++            latent_scale=latent_scale,
++            fp8_rope=fp8_rope,
++            latent_scale_per_token=latent_scale_per_token,
+         )
+ 
+     from .kernel import run_unified_decode
+@@ -291,6 +307,10 @@ def compressed_mla_decode_forward(
+         return_lse=return_lse,
+         lse_scale=lse_scale,
+         out=out,
++        scale_format_override=scale_format,
++        latent_scale=latent_scale,
++        fp8_rope_override=fp8_rope,
++        latent_scale_per_token=latent_scale_per_token,
+     )
+ 
+ 
+@@ -328,6 +348,10 @@ def _run_sm120_compressed_prefill(
+     return_lse: bool,
+     lse_scale: Literal["base2", "natural"],
+     out: torch.Tensor | None = None,
++    scale_format: int | None = None,
++    latent_scale: float = 1.0,
++    fp8_rope: bool | None = None,
++    latent_scale_per_token: bool = False,
+ ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+     """Route a DSV4 prefill-like (extend/verify/draft_extend) compressed call to the
+     active SM120 single-pass prefill.
+@@ -371,6 +395,10 @@ def _run_sm120_compressed_prefill(
+         topk_length=swa_topk_lengths,
+         attn_sink=attn_sink,
+         output=output,
++        scale_format=scale_format,
++        latent_scale=latent_scale,
++        fp8_rope=fp8_rope,
++        latent_scale_per_token=latent_scale_per_token,
+         **extra_kwargs,
+     )
+     if not return_lse:
+@@ -519,11 +547,15 @@ def _validate_compressed_cache_layout(
+     *,
+     page_size: int,
+     name: str,
++    scale_format: int | None = None,
+ ) -> None:
+     page_size = int(page_size)
+     if page_size <= 0:
+         raise ValueError(f"{name} page_size must be positive, got {page_size}")
+-    expected_page_nbytes = compressed_mla_page_nbytes(page_size)
++    if scale_format == ScaleFormat.NVFP4_E4M3:
++        expected_page_nbytes = compressed_mla_nvfp4_page_nbytes(page_size)
++    else:
++        expected_page_nbytes = compressed_mla_page_nbytes(page_size)
+     if int(cache.shape[1]) != expected_page_nbytes:
+         raise ValueError(
+             f"{name} page byte width must be {expected_page_nbytes} for page_size "
+diff --git a/sparkinfer/attention/_shared/mla/compressed_reference.py b/sparkinfer/attention/_shared/mla/compressed_reference.py
+index ab21b4607b3ad863b8d1c7730f9eef68b16cbbea..1597fe746ff6b4ea4e26b92dca5b1082a370fb6c 100644
+--- a/sparkinfer/attention/_shared/mla/compressed_reference.py
++++ b/sparkinfer/attention/_shared/mla/compressed_reference.py
+@@ -32,6 +32,7 @@ COMPRESSED_MLA_BYTES_PER_TOKEN = (
+ )
+ COMPRESSED_MLA_FP8_MAX = float(torch.finfo(torch.float8_e4m3fn).max)
+ COMPRESSED_MLA_UE8M0_BIAS = 127
++COMPRESSED_MLA_NVFP4_BYTES_PER_TOKEN = 432
+ 
+ COMPRESSED_MLA_LOCAL_Q_HEADS_TP2 = 32
+ COMPRESSED_MLA_TOTAL_Q_HEADS = 64
+@@ -57,6 +58,14 @@ def compressed_mla_page_nbytes(page_size: int) -> int:
+     )
+ 
+ 
++def compressed_mla_nvfp4_page_nbytes(page_size: int) -> int:
++    """Return the byte count for contiguous 432-byte DSV4 NVFP4 records."""
++
++    if page_size <= 0:
++        raise ValueError(f"page_size must be positive, got {page_size}")
++    return int(page_size) * COMPRESSED_MLA_NVFP4_BYTES_PER_TOKEN
++
++
+ def compressed_mla_scale_region_offset(page_size: int) -> int:
+     """Return the byte offset at which UE8M0 scales start inside a page."""
+ 
+diff --git a/sparkinfer/attention/_shared/mla/kernel.py b/sparkinfer/attention/_shared/mla/kernel.py
+index 0568a3cd6ac442d6d28ed26e3a59b07e1d486ccf..ce9b5dbd6deaaf3714adc6fdbb4573f8ee4698d1 100644
+--- a/sparkinfer/attention/_shared/mla/kernel.py
++++ b/sparkinfer/attention/_shared/mla/kernel.py
+@@ -2322,7 +2322,10 @@ def _cache_block_stride_bytes(
+         compressed_mla_page_nbytes,
+     )
+ 
+-    if int(model_type) == int(ModelType.GLM_NSA):
++    if record_bytes is not None and (
++        int(model_type) == int(ModelType.GLM_NSA)
++        or int(record_bytes) != 584
++    ):
+         # GLM-family per-token contiguous record: 656B (ARBITRARY_FP32) or
+         # 432B (NVFP4_E4M3). ``record_bytes`` comes from traits.kv_gmem_stride.
+         rec = int(record_bytes) if record_bytes is not None else _GLM_KV_GMEM_STRIDE
+@@ -2397,10 +2400,13 @@ def _sparse_mla_decode_grid_flat_launch(
+         and _env_glm_h8_native_enabled()
+     )
+     native_dsv4_h8 = bool(
+-        int(model_type) == int(ModelType.DSV4) and int(valid_hpb) == 8
++        int(model_type) == int(ModelType.DSV4)
++        and int(scale_format) != int(ScaleFormat.NVFP4_E4M3)
++        and int(valid_hpb) == 8
+     )
+     native_dsv4_h16 = bool(
+         int(model_type) == int(ModelType.DSV4)
++        and int(scale_format) != int(ScaleFormat.NVFP4_E4M3)
+         and int(valid_hpb) == 16
+         and int(head_block_offset) == 0
+         and (int(topk) + _CAND_WINDOW - 1) // _CAND_WINDOW
+@@ -2852,12 +2858,19 @@ def run_unified_decode(
+     if scale_format_override is not None:
+         scale_format = int(scale_format_override)
+     if scale_format == ScaleFormat.NVFP4_E4M3 and fp8_rope_override is None:
+-        record_bytes = int(swa_k_cache.shape[-1])
+-        if record_bytes not in (368, 432):
++        if model_type == ModelType.DSV4:
++            fp8_rope_override = False
++        elif swa_k_cache.ndim == 2:
+             raise ValueError(
+-                f"NVFP4 cache record must be 368 or 432 bytes, got {record_bytes}"
++                "flat GLM NVFP4 pages require an explicit fp8_rope_override"
+             )
+-        fp8_rope_override = record_bytes == 368
++        else:
++            record_bytes = int(swa_k_cache.shape[-1])
++            if record_bytes not in (368, 432):
++                raise ValueError(
++                    f"NVFP4 cache record must be 368 or 432 bytes, got {record_bytes}"
++                )
++            fp8_rope_override = record_bytes == 368
+     # FAIL-CLOSED: the per-token fp32 latent scale lives at bytes [292, 296) of
+     # the NVFP4 fp8-rope 368-byte record ONLY.
+     if latent_scale_per_token:
+@@ -2878,8 +2891,10 @@ def run_unified_decode(
+         fp8_rope=fp8_rope_override,
+         latent_scale_per_token=bool(latent_scale_per_token),
+     )
+-    if scale_format == ScaleFormat.NVFP4_E4M3 and int(swa_k_cache.shape[-1]) != int(
+-        traits.kv_gmem_stride
++    if (
++        scale_format == ScaleFormat.NVFP4_E4M3
++        and swa_k_cache.ndim >= 3
++        and int(swa_k_cache.shape[-1]) != int(traits.kv_gmem_stride)
+     ):
+         raise ValueError(
+             "NVFP4 cache record width disagrees with fp8_rope_override: "
+@@ -2905,6 +2920,9 @@ def run_unified_decode(
+ 
+     h16_allowed = bool(
+         int(model_type) == int(ModelType.DSV4)
++        # The native H8/H16 path stages the 584-byte FP8 record in a packed
++        # 592-byte row. The 432-byte NVFP4 record uses the generic BF16 path.
++        and int(traits.scale_format) != int(ScaleFormat.NVFP4_E4M3)
+         and heads % 16 == 0
+         and num_main_chunks + num_extra_chunks <= _DSV4_H8_MAX_CHUNKS
+     )
+@@ -2929,6 +2947,7 @@ def run_unified_decode(
+         native_dsv4_h16 = bool(h16_allowed and h16_mode)
+     native_dsv4_h8 = bool(
+         int(model_type) == int(ModelType.DSV4)
++        and int(traits.scale_format) != int(ScaleFormat.NVFP4_E4M3)
+         and heads % 8 == 0
+         and num_main_chunks + num_extra_chunks <= _DSV4_H8_MAX_CHUNKS
+         and not native_dsv4_h16
+@@ -3107,6 +3126,7 @@ def run_unified_decode(
+             indexed_k_cache,
+             page_size=pbs_extra,
+             model_type=int(model_type),
++            record_bytes=int(traits.kv_gmem_stride),
+         )
+         extra_kv_flat = _cache_base_tensor(indexed_k_cache)
+         extra_indices_t = indexed_indices.contiguous()
+diff --git a/sparkinfer/attention/_shared/mla/prefill.py b/sparkinfer/attention/_shared/mla/prefill.py
+index b5f396fc1a6758009dc82c247e08d5766fe85118..87d35d6947b64baabaea032e022bb82a02a8f537 100644
+--- a/sparkinfer/attention/_shared/mla/prefill.py
++++ b/sparkinfer/attention/_shared/mla/prefill.py
+@@ -51,7 +51,9 @@ def _cache_block_stride_bytes(
+         compressed_mla_page_nbytes,
+     )
+ 
+-    if model_type == ModelType.GLM_NSA:
++    if record_bytes is not None and (
++        model_type == ModelType.GLM_NSA or int(record_bytes) != 584
++    ):
+         # GLM-family per-token contiguous record: 656B (ARBITRARY_FP32) or
+         # 432B (NVFP4_E4M3). ``record_bytes`` comes from traits.kv_gmem_stride.
+         rec = int(record_bytes) if record_bytes is not None else _GLM_KV_GMEM_STRIDE
+@@ -186,7 +188,7 @@ def run_unified_prefill(
+         scale_format = inferred_scale_format
+     else:
+         scale_format = int(scale_format)
+-        if q_head_dim == _GLM_HEAD_DIM and scale_format == ScaleFormat.NVFP4_E4M3:
++        if scale_format == ScaleFormat.NVFP4_E4M3:
+             # NVFP4 GLM-family prefill runs the BF16-QK MG arm (native E2M1
+             # dequant + BF16 MMA); FP8 compute would misread the 432B record.
+             compute_mode = ComputeMode.BF16
+@@ -355,20 +357,20 @@ def run_unified_prefill(
+             model_type=ModelType.GLM_NSA,
+             scale_format=ScaleFormat.ARBITRARY_FP32,
+         )
+-    # ── NVFP4 (E2M1 + E4M3 group-16, GLM-family) MG gate ───────────────────────
+-    # Same MG head-group structure as GLM; the math arms are the BF16-QK path
++    # ── NVFP4 (E2M1 + E4M3 group-16) MG gate ───────────────────────────────────
++    # Same MG head-group structure for GLM and DSV4; the math arms are BF16-QK
+     # with native in-register E2M1/E4M3 dequant (the same math as the validated
+     # NVFP4 decode). topk==128 additionally routes here (BF16-QK shape).
+     _mg_nvfp4 = (
+         _mg_enabled
+         and not has_extra
+-        and model_type == ModelType.GLM_NSA
++        and model_type in (ModelType.GLM_NSA, ModelType.DSV4)
+         and scale_format == ScaleFormat.NVFP4_E4M3
+     )
+     if _mg_nvfp4 and topk in (128, 512, 1024, 2048):
+         return _run_partitioned_mg(
+             compute_mode=ComputeMode.BF16,
+-            model_type=ModelType.GLM_NSA,
++            model_type=model_type,
+             scale_format=ScaleFormat.NVFP4_E4M3,
+         )
+     _mg_base = (
+@@ -426,6 +428,6 @@ def run_unified_prefill(
+         "(BF16-QK, heads%8==0); "
+         "DSV4 dual-cache topk==128 with heads%8==0 and pbs_extra in {2, 64}; "
+         "GLM_NSA topk in {512, 1024, 2048}; "
+-        "NVFP4 (GLM-family, scale_format=2) topk in {128, 512, 1024, 2048}. "
++        "NVFP4 (DSV4/GLM, scale_format=2) topk in {128, 512, 1024, 2048}. "
+         "No decode-reuse fallback."
+     )
+diff --git a/sparkinfer/attention/_shared/mla/prefill_mg.py b/sparkinfer/attention/_shared/mla/prefill_mg.py
+index ea0f8987374dc5b918a9ad071fd0fcb1b5efd619..c6c7983f01d4f50e4b6f6b6397e834eb7331a980 100644
+--- a/sparkinfer/attention/_shared/mla/prefill_mg.py
++++ b/sparkinfer/attention/_shared/mla/prefill_mg.py
+@@ -201,7 +201,7 @@ def _cache_block_stride_bytes(
+         compressed_mla_page_nbytes,
+     )
+ 
+-    if is_glm:
++    if record_bytes is not None and (is_glm or int(record_bytes) != 584):
+         # GLM-family per-token contiguous record: 656B (ARBITRARY_FP32) or
+         # 432B (NVFP4_E4M3). ``record_bytes`` comes from traits.kv_gmem_stride.
+         rec = int(record_bytes) if record_bytes is not None else _GLM_IO_STRIDE
+@@ -2369,7 +2369,7 @@ class UnifiedPrefillMGKernel:
+         # NVFP4 per-token latent-scale mode, which stages one fp32 per
+         # candidate.  DSV4 stages XV-RoPE weights into the W_FP8 region after
+         # XV-NoPE consumes it.
+-        if cutlass.const_expr(is_glm and not t.latent_scale_per_token):
++        if cutlass.const_expr((is_glm or is_nvfp4) and not t.latent_scale_per_token):
+             kv_sc_addr = Int32(0)
+         else:
+             kv_sc_addr = shared_ptr_to_u32(st.kv_sc.data_ptr())
+@@ -2523,7 +2523,7 @@ class UnifiedPrefillMGKernel:
+                 g_end0 = Int32(_CAND_WINDOW)
+                 if g_end0 > section_len:
+                     g_end0 = section_len
+-                if cutlass.const_expr(is_glm):
++                if cutlass.const_expr(is_glm or is_nvfp4):
+                     io_issue_gather_glm_mg(
+                         kv_cache_u8,
+                         topk_row,
+@@ -2623,7 +2623,7 @@ class UnifiedPrefillMGKernel:
+                         g_end = g_start + Int32(_CAND_WINDOW)
+                         if g_end > section_len:
+                             g_end = section_len
+-                        if cutlass.const_expr(is_glm):
++                        if cutlass.const_expr(is_glm or is_nvfp4):
+                             io_issue_gather_glm_mg(
+                                 kv_cache_u8,
+                                 topk_row,
+@@ -4150,19 +4150,24 @@ def run_unified_prefill_mg(
+             f"head_offset={head_offset}, active_heads={active_heads}, total_heads={total_heads}"
+         )
+     if scale_format == ScaleFormat.NVFP4_E4M3:
+-        record_bytes = int(kv_cache.shape[-1])
+-        if fp8_rope is None:
+-            if record_bytes not in (368, 432):
++        if kv_cache.ndim >= 3:
++            record_bytes = int(kv_cache.shape[-1])
++            if fp8_rope is None:
++                if record_bytes not in (368, 432):
++                    raise ValueError(
++                        "NVFP4 sparse MLA MG cache record must be 368 or 432 bytes, "
++                        f"got {record_bytes}"
++                    )
++                fp8_rope = record_bytes == 368
++            expected_record_bytes = 368 if fp8_rope else 432
++            if record_bytes != expected_record_bytes:
+                 raise ValueError(
+-                    "NVFP4 sparse MLA MG cache record must be 368 or 432 bytes, "
+-                    f"got {record_bytes}"
++                    "NVFP4 sparse MLA MG cache record disagrees with fp8_rope: "
++                    f"got {record_bytes} bytes, expected {expected_record_bytes}"
+                 )
+-            fp8_rope = record_bytes == 368
+-        expected_record_bytes = 368 if fp8_rope else 432
+-        if record_bytes != expected_record_bytes:
++        elif fp8_rope is None:
+             raise ValueError(
+-                "NVFP4 sparse MLA MG cache record disagrees with fp8_rope: "
+-                f"got {record_bytes} bytes, expected {expected_record_bytes}"
++                "flat NVFP4 sparse MLA pages require an explicit fp8_rope value"
+             )
+     # FAIL-CLOSED: the per-token fp32 latent scale lives at bytes [292, 296) of
+     # the NVFP4 fp8-rope 368-byte record ONLY.
+@@ -4242,6 +4247,7 @@ def run_unified_prefill_mg(
+                 extra_kv_cache,
+                 page_size=pbs_extra,
+                 is_glm=False,
++                record_bytes=int(traits.kv_gmem_stride),
+             )
+         extra_topk = int(extra_indices.shape[1])
+         num_extra_tiles = (extra_topk + _CAND_WINDOW - 1) // _CAND_WINDOW
+diff --git a/sparkinfer/attention/_shared/mla/traits.py b/sparkinfer/attention/_shared/mla/traits.py
+index bd395e0661af64298c3a58ffeb8fb5f662ade257..cdc4f40b7009264500bfee41af1c5b95614895e5 100644
+--- a/sparkinfer/attention/_shared/mla/traits.py
++++ b/sparkinfer/attention/_shared/mla/traits.py
+@@ -117,9 +117,44 @@ def make_unified_traits(
+         )
+ 
+     if model_type == ModelType.DSV4:
++        if scale_format == ScaleFormat.NVFP4_E4M3:
++            if fp8_rope_requested:
++                raise ValueError(
++                    "DSV4 NVFP4 currently requires the 432-byte BF16-RoPE record"
++                )
++            if latent_scale_per_token:
++                raise ValueError(
++                    "DSV4 NVFP4 does not define a per-token latent scale field"
++                )
++            return UnifiedMLATraits(
++                model_type=ModelType.DSV4,
++                compute_mode=ComputeMode.BF16,
++                scale_format=ScaleFormat.NVFP4_E4M3,
++                d_nope=448,
++                d_rope=64,
++                d_v=512,
++                quant_tile=64,
++                num_scales=7,
++                n_v_chunks=8,
++                nt_per_warp_xv=1,
++                kv_gmem_stride=432,
++                kv_smem_stride=288,
++                q_nope_stride=456,
++                bi=64,
++                hpb=16,
++                block_threads=288,
++                math_threads=256,
++                bulk_tx_bytes=26624,
++                v_has_rope=False,
++                has_extra_cache=True,
++                fp8_rope=False,
++                rope_gmem_offset=304,
++                rope_payload_bytes=128,
++                rope_scale_offset=-1,
++            )
+         if scale_format != ScaleFormat.UE8M0_BYTE:
+             raise ValueError(
+-                "DSV4 requires ScaleFormat.UE8M0_BYTE (footer); "
++                "DSV4 requires ScaleFormat.UE8M0_BYTE or NVFP4_E4M3; "
+                 f"got scale_format={scale_format!r}"
+             )
+         # DSV4 column of verified_traits.md (UE8M0_BYTE, V_HAS_ROPE=true).
+diff --git a/tests/attention/test_attention_mla_compressed.py b/tests/attention/test_attention_mla_compressed.py
+index 9ebe5b5f6051757c223af4e64332d104dfb616f6..7443bb0cc37fdb59a0ead39d13442dd07a045943 100644
+--- a/tests/attention/test_attention_mla_compressed.py
++++ b/tests/attention/test_attention_mla_compressed.py
+@@ -19,6 +19,7 @@ from sparkinfer.attention._shared.mla.compressed_reference import (
+     COMPRESSED_MLA_DSV4_PAGE_SIZE,
+     COMPRESSED_MLA_SWA_TOKENS,
+     compressed_mla_page_nbytes,
++    compressed_mla_nvfp4_page_nbytes,
+     compressed_sparse_mla_reference,
+     gather_compressed_mla_kv_cache_reference,
+     pack_compressed_mla_kv_cache_reference,
+@@ -299,6 +300,9 @@ def test_compressed_mla_page_byte_widths_match_padded_layout() -> None:
+     assert compressed_mla_page_nbytes(COMPRESSED_MLA_DSV4_PAGE_SIZE) == 149760
+     assert compressed_mla_page_nbytes(COMPRESSED_MLA_C4_PAGE_SIZE) == 37440
+     assert compressed_mla_page_nbytes(COMPRESSED_MLA_C128_PAGE_SIZE) == 1728
++    assert compressed_mla_nvfp4_page_nbytes(COMPRESSED_MLA_DSV4_PAGE_SIZE) == 110592
++    assert compressed_mla_nvfp4_page_nbytes(COMPRESSED_MLA_C4_PAGE_SIZE) == 27648
++    assert compressed_mla_nvfp4_page_nbytes(COMPRESSED_MLA_C128_PAGE_SIZE) == 864
+ 
+ 
+ def test_compressed_mla_decode_does_not_pin_flash_tp2_heads_by_default() -> None:
+diff --git a/tests/attention/test_attention_mla_nvfp4.py b/tests/attention/test_attention_mla_nvfp4.py
+index c9806cebfb8f20f31fe2f0c7421880e752fafb4b..412d05d507b05553bca159a49df4fb0fb008ee16 100644
+--- a/tests/attention/test_attention_mla_nvfp4.py
++++ b/tests/attention/test_attention_mla_nvfp4.py
+@@ -24,6 +24,23 @@ def test_nvfp4_decode_allocates_bf16_q_staging() -> None:
+     assert layout.q_sc_off >= layout.q_fp8_off + expected_bytes
+ 
+ 
++def test_dsv4_nvfp4_traits_use_432_byte_dual_cache_record() -> None:
++    nvfp4_traits = traits.make_unified_traits(
++        ModelType.DSV4,
++        ComputeMode.BF16,
++        ScaleFormat.NVFP4_E4M3,
++        fp8_rope=False,
++    )
++
++    assert nvfp4_traits.kv_gmem_stride == 432
++    assert nvfp4_traits.kv_smem_stride == 288
++    assert nvfp4_traits.d_nope == 448
++    assert nvfp4_traits.d_v == 512
++    assert nvfp4_traits.n_v_chunks == 8
++    assert nvfp4_traits.v_has_rope is False
++    assert nvfp4_traits.has_extra_cache is True
++
++
+ def test_nvfp4_decode_rejects_unknown_record_width() -> None:
+     with pytest.raises(ValueError, match="must be 368 or 432 bytes"):
+         _run_invalid_nvfp4_decode(record_bytes=400, fp8_rope=None)

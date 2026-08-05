@@ -1,0 +1,1794 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index e1988dc1ad7afa2025312896395585f3d8a1be6d..13185c2c360947e06e77c9bc17b90bacefa38bca 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -856,7 +856,10 @@ if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")
+     "7.5;8.0;8.7;8.9+PTX" "${CUDA_ARCHS}")
+   # subtract out the archs that are already built for 3x
+   list(REMOVE_ITEM SCALED_MM_2X_ARCHS ${SCALED_MM_3X_ARCHS})
+-  if (SCALED_MM_2X_ARCHS)
++  option(VLLM_ENABLE_SCALED_MM_C2X
++    "Build legacy CUTLASS 2.x scaled-mm fallback kernels"
++    ON)
++  if (VLLM_ENABLE_SCALED_MM_C2X AND SCALED_MM_2X_ARCHS)
+     set(SCALED_MM_C2X_SRCS "csrc/libtorch_stable/quantization/w8a8/cutlass/scaled_mm_c2x.cu")
+     set_gencode_flags_for_srcs(
+       SRCS "${SCALED_MM_C2X_SRCS}"
+@@ -957,12 +960,19 @@ if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")
+   # sources with the SM10x/11x block below; set_gencode_flags_for_srcs appends
+   # per-source flags, so shared files accumulate both SM12x and SM10x/11x
+   # gencodes when both families are requested.
++  option(VLLM_ENABLE_SM12X_NVFP4
++    "Build SM12x NVFP4 kernels (disable for FP8-only GB10 builds)"
++    ON)
++  option(VLLM_ENABLE_SM12X_NVFP4_KV
++    "Build the SM12x NVFP4 KV-cache writer without the SM12x weight kernels"
++    ON)
++
+   if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 13.0)
+     cuda_archs_loose_intersection(FP4_SM120_ARCHS "12.0f" "${CUDA_ARCHS}")
+   else()
+     cuda_archs_loose_intersection(FP4_SM120_ARCHS "12.0a;12.1a" "${CUDA_ARCHS}")
+   endif()
+-  if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.8 AND FP4_SM120_ARCHS)
++  if(VLLM_ENABLE_SM12X_NVFP4 AND ${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.8 AND FP4_SM120_ARCHS)
+     set(FP4_SM120_SRCS
+       "csrc/libtorch_stable/quantization/fp4/nvfp4_quant_kernels.cu"
+       "csrc/libtorch_stable/quantization/fp4/activation_nvfp4_quant_fusion_kernels.cu"
+@@ -981,6 +991,28 @@ if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")
+     message(STATUS "Not building SM12x NVFP4 as no compatible archs were found.")
+   endif()
+ 
++  # The DeepSeek MLA writer lives in the existing cache_kernels.cu translation
++  # unit. Enable its SM12x branch per source so an EXL3 build can use the
++  # nvfp4_ds_mla cache format without invalidating/rebuilding every stable
++  # extension object or compiling unrelated NVFP4 weight kernels.
++  if(NOT VLLM_ENABLE_SM12X_NVFP4
++     AND VLLM_ENABLE_SM12X_NVFP4_KV
++     AND ${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.8
++     AND FP4_SM120_ARCHS)
++    set(FP4_SM120_KV_SRCS "csrc/libtorch_stable/cache_kernels.cu")
++    set(FP4_SM120_KV_DISPATCH_SRC
++      "csrc/libtorch_stable/nvfp4_kv_cache_kernels.cu")
++    set_gencode_flags_for_srcs(
++      SRCS "${FP4_SM120_KV_DISPATCH_SRC}"
++      CUDA_ARCHS "${FP4_SM120_ARCHS}")
++    list(APPEND VLLM_STABLE_EXT_SRC "${FP4_SM120_KV_DISPATCH_SRC}")
++    set_property(
++      SOURCE "${FP4_SM120_KV_SRCS}"
++      APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_NVFP4_SM120=1)
++    message(STATUS
++      "Building SM12x NVFP4 KV-cache writer for archs: ${FP4_SM120_ARCHS}")
++  endif()
++
+   # SM10x/11x FP4 kernels. MXFP4 experts quantization is currently compiled
+   # only in this block; SM12x has separate NVFP4 matmul/MoE kernels above.
+   if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 13.0)
+@@ -1416,12 +1448,20 @@ endif()
+ 
+ # For CUDA we also build and ship some external projects.
+ if (VLLM_GPU_LANG STREQUAL "CUDA")
++    option(VLLM_BUILD_QUTLASS "Build and install the QuTLASS extension" ON)
++    option(VLLM_BUILD_VLLM_FLASH_ATTN
++      "Build and install bundled vLLM FlashAttention kernels"
++      ON)
+     include(cmake/external_projects/deepgemm.cmake)
+     include(cmake/external_projects/fmha_sm100.cmake)
+     include(cmake/external_projects/flashmla.cmake)
+-    include(cmake/external_projects/qutlass.cmake)
++    if(VLLM_BUILD_QUTLASS)
++      include(cmake/external_projects/qutlass.cmake)
++    endif()
+     include(cmake/external_projects/tml_fa4.cmake)
+ 
+     # vllm-flash-attn should be last as it overwrites some CMake functions
+-    include(cmake/external_projects/vllm_flash_attn.cmake)
++    if(VLLM_BUILD_VLLM_FLASH_ATTN)
++      include(cmake/external_projects/vllm_flash_attn.cmake)
++    endif()
+ endif ()
+diff --git a/csrc/libtorch_stable/fused_deepseek_v4_qnorm_rope_kv_insert_kernel.cu b/csrc/libtorch_stable/fused_deepseek_v4_qnorm_rope_kv_insert_kernel.cu
+index 7bc435b8e0da26c83849366356955d6d25119cf8..478335274dc2693dd9466548e3cbb3f83e2114ef 100644
+--- a/csrc/libtorch_stable/fused_deepseek_v4_qnorm_rope_kv_insert_kernel.cu
++++ b/csrc/libtorch_stable/fused_deepseek_v4_qnorm_rope_kv_insert_kernel.cu
+@@ -109,6 +109,50 @@ constexpr float NUM_TOKEN_CUTOFF = 1024;
+ constexpr int kNumLanes = 32;
+ constexpr int kElemsPerLane = kHeadDim / kNumLanes;  // 16
+ 
++#ifndef USE_ROCM
++struct PackedE2M1x16 {
++  uint32_t lo;
++  uint32_t hi;
++};
++
++__device__ __forceinline__ uint8_t floatToE2M1(float value) {
++  uint8_t const sign = (__float_as_uint(value) >> 31) & 1;
++  float const magnitude = fabsf(value);
++  uint8_t code;
++  if (magnitude <= 0.25f)
++    code = 0;
++  else if (magnitude < 0.75f)
++    code = 1;
++  else if (magnitude <= 1.25f)
++    code = 2;
++  else if (magnitude < 1.75f)
++    code = 3;
++  else if (magnitude <= 2.5f)
++    code = 4;
++  else if (magnitude < 3.5f)
++    code = 5;
++  else if (magnitude <= 5.0f)
++    code = 6;
++  else
++    code = 7;
++  return static_cast<uint8_t>((sign << 3) | code);
++}
++
++__device__ __forceinline__ PackedE2M1x16 packE2M1x16(float const* values) {
++  PackedE2M1x16 packed{0, 0};
++#pragma unroll
++  for (int i = 0; i < 8; i++) {
++    uint8_t const byte = static_cast<uint8_t>(
++        floatToE2M1(values[2 * i]) | (floatToE2M1(values[2 * i + 1]) << 4));
++    if (i < 4)
++      packed.lo |= static_cast<uint32_t>(byte) << (8 * i);
++    else
++      packed.hi |= static_cast<uint32_t>(byte) << (8 * (i - 4));
++  }
++  return packed;
++}
++#endif
++
+ // Pack this lane's 16 fp32 elements into per-tensor E4M3 FP8 (one uint4 = 16
+ // B), scaling by `scale` (a reciprocal scale) and saturating to ±448.  Used by
+ // the FlashInfer full-cache path for both the Q and KV stores.
+@@ -183,7 +227,7 @@ __device__ __forceinline__ void processDeepseekV4Slot(
+     uint8_t* __restrict__ k_cache, int64_t const* __restrict__ slot_mapping,
+     int64_t const* __restrict__ position_ids,
+     float const* __restrict__ cos_sin_cache, int const cache_block_size,
+-    int const kv_block_stride) {
++    int const kv_block_stride, bool const use_nvfp4) {
+   using Converter = vllm::_typeConvert<scalar_t_in>;
+   bool const isKV = (slotIdx == kNumHeadsQPadded);
+   bool const isPadQ = !isKV && (slotIdx >= num_heads_q);
+@@ -323,6 +367,43 @@ __device__ __forceinline__ void processDeepseekV4Slot(
+       for (int i = 0; i < kElemsPerLane; i++) {
+         local_absmax = fmaxf(local_absmax, fabsf(elements[i]));
+       }
++      if (use_nvfp4) {
++#ifndef USE_ROCM
++        constexpr int kNvfp4RecordBytes = 432;
++        uint8_t* record = block_base + pos_in_block * kNvfp4RecordBytes;
++        float const absmax = fmaxf(local_absmax, 6.0f * 0x1p-126f);
++        __nv_fp8_e4m3 scale_fp8(absmax / 6.0f);
++        float const inv_scale = 1.0f / static_cast<float>(scale_fp8);
++        float scaled[kElemsPerLane];
++#pragma unroll
++        for (int i = 0; i < kElemsPerLane; i++) {
++          scaled[i] = elements[i] * inv_scale;
++        }
++        PackedE2M1x16 const packed = packE2M1x16(scaled);
++        *reinterpret_cast<PackedE2M1x16*>(record + laneId * 8) = packed;
++        record[256 + laneId] = reinterpret_cast<uint8_t const&>(scale_fp8);
++        if (laneId < 16) record[288 + laneId] = 0;
++        if (is_rope_lane) {
++          uint4 out0, out1;
++          typename Converter::packed_hip_type* po0 =
++              reinterpret_cast<typename Converter::packed_hip_type*>(&out0);
++          typename Converter::packed_hip_type* po1 =
++              reinterpret_cast<typename Converter::packed_hip_type*>(&out1);
++#pragma unroll
++          for (int i = 0; i < 4; i++) {
++            po0[i] = Converter::convert(
++                make_float2(elements[2 * i], elements[2 * i + 1]));
++            po1[i] = Converter::convert(
++                make_float2(elements[8 + 2 * i], elements[8 + 2 * i + 1]));
++          }
++          int const rope_local_base = dim_base - kNopeDim;
++          scalar_t_in* bf16_dst =
++              reinterpret_cast<scalar_t_in*>(record + 304) + rope_local_base;
++          *reinterpret_cast<uint4*>(bf16_dst) = out0;
++          *reinterpret_cast<uint4*>(bf16_dst + 8) = out1;
++        }
++#endif
++      } else {
+       float const absmax = fmaxf(warp4MaxAbs(local_absmax), 1e-4f);
+       float const exponent = ceilf(log2f(absmax / kFp8Max));
+       float const inv_scale = exp2f(-exponent);
+@@ -374,6 +455,7 @@ __device__ __forceinline__ void processDeepseekV4Slot(
+         *reinterpret_cast<uint4*>(bf16_dst) = out0;
+         *reinterpret_cast<uint4*>(bf16_dst + 8) = out1;
+       }
++      }
+     }
+   }
+ }
+@@ -418,7 +500,8 @@ __global__ void fusedDeepseekV4QNormRopeKVRopeQuantInsertKernel(
+     int const num_tokens_insert,  // = slot_mapping.size(0), ≤ num_tokens_full
+     int const num_heads_q,        // live Q heads (input layout)
+     int const cache_block_size,   // tokens per paged-cache block
+-    int const kv_block_stride) {  // bytes per paged-cache block
++    int const kv_block_stride,    // bytes per paged-cache block
++    bool const use_nvfp4) {
+ #if (!defined(__CUDA_ARCH__) || __CUDA_ARCH__ < 800) && !defined(USE_ROCM)
+   // BF16 _typeConvert specialization is unavailable on pre-Ampere.  The
+   // DeepseekV4 kernel only runs with bf16 inputs in practice, so compile a
+@@ -474,7 +557,7 @@ __global__ void fusedDeepseekV4QNormRopeKVRopeQuantInsertKernel(
+     processDeepseekV4Slot<scalar_t_in, kNumHeadsQPadded>(
+         v0, v1, tokenIdx, slotIdx, dim_base, laneId, num_heads_q, eps, q_out,
+         k_cache, slot_mapping, position_ids, cos_sin_cache, cache_block_size,
+-        kv_block_stride);
++        kv_block_stride, use_nvfp4);
+ 
+ #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+     cudaTriggerProgrammaticLaunchCompletion();
+@@ -503,7 +586,7 @@ __global__ void fusedDeepseekV4QNormRopeKVRopeQuantInsertKernelReducedGrid(
+     float const* __restrict__ cos_sin_cache, float const eps,
+     int const num_tokens_full, int const num_tokens_insert,
+     int const num_heads_q, int const cache_block_size,
+-    int const kv_block_stride) {
++    int const kv_block_stride, bool const use_nvfp4) {
+ #if (!defined(__CUDA_ARCH__) || __CUDA_ARCH__ < 800) && !defined(USE_ROCM)
+   if constexpr (std::is_same_v<scalar_t_in, c10::BFloat16>) {
+     return;
+@@ -561,7 +644,7 @@ __global__ void fusedDeepseekV4QNormRopeKVRopeQuantInsertKernelReducedGrid(
+         processDeepseekV4Slot<scalar_t_in, kNumHeadsQPadded>(
+             v0_curr, v1_curr, tokenIdx, curr_slot, dim_base, laneId,
+             num_heads_q, eps, q_out, k_cache, slot_mapping, position_ids,
+-            cos_sin_cache, cache_block_size, kv_block_stride);
++            cos_sin_cache, cache_block_size, kv_block_stride, use_nvfp4);
+ 
+         // ── Buffer rotation: hand the prefetched LDGs to the next iter.
+         v0_curr = v0_next;
+@@ -588,7 +671,7 @@ static void launchFusedDeepseekV4Templated(
+     float const* cos_sin_cache, float const eps, int const num_tokens_full,
+     int const num_tokens_insert, int const num_heads_q,
+     int const cache_block_size, int const kv_block_stride,
+-    cudaStream_t stream) {
++    bool const use_nvfp4, cudaStream_t stream) {
+   constexpr int kBlockSize = 256;
+   constexpr int kWarpsPerBlock = kBlockSize / 32;
+   int64_t const total_warps =
+@@ -628,7 +711,7 @@ static void launchFusedDeepseekV4Templated(
+                                                         kNumHeadsQPadded>,
+         q_in, q_out, kv_in, k_cache, slot_mapping, position_ids, cos_sin_cache,
+         eps, num_tokens_full, num_tokens_insert, num_heads_q, cache_block_size,
+-        kv_block_stride);
++        kv_block_stride, use_nvfp4);
+   } else {
+     config.gridDim = dim3(num_tokens_full);
+     cudaLaunchKernelEx(
+@@ -637,7 +720,7 @@ static void launchFusedDeepseekV4Templated(
+             scalar_t_in, kNumHeadsQPadded>,
+         q_in, q_out, kv_in, k_cache, slot_mapping, position_ids, cos_sin_cache,
+         eps, num_tokens_full, num_tokens_insert, num_heads_q, cache_block_size,
+-        kv_block_stride);
++        kv_block_stride, use_nvfp4);
+   }
+ #else
+   // ROCm: use standard kernel launch syntax (no PDL/stream serialization)
+@@ -646,7 +729,7 @@ static void launchFusedDeepseekV4Templated(
+       <<<grid, kBlockSize, 0, stream>>>(
+           q_in, q_out, kv_in, k_cache, slot_mapping, position_ids,
+           cos_sin_cache, eps, num_tokens_full, num_tokens_insert, num_heads_q,
+-          cache_block_size, kv_block_stride);
++          cache_block_size, kv_block_stride, use_nvfp4);
+ #endif
+ }
+ 
+@@ -660,13 +743,13 @@ void launchFusedDeepseekV4QNormRopeKVRopeQuantInsert(
+     int const num_tokens_full, int const num_tokens_insert,
+     int const num_heads_q, int const num_heads_q_padded,
+     int const cache_block_size, int const kv_block_stride,
+-    cudaStream_t stream) {
++    bool const use_nvfp4, cudaStream_t stream) {
+ #define DISPATCH(N)                                                         \
+   case N:                                                                   \
+     launchFusedDeepseekV4Templated<scalar_t_in, N>(                         \
+         q_in, q_out, kv_in, k_cache, slot_mapping, position_ids,            \
+         cos_sin_cache, eps, num_tokens_full, num_tokens_insert, num_heads_q, \
+-        cache_block_size, kv_block_stride, stream);                         \
++        cache_block_size, kv_block_stride, use_nvfp4, stream);              \
+     return;
+ 
+   switch (num_heads_q_padded) {
+@@ -950,7 +1033,7 @@ torch::stable::Tensor fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert(
+     torch::stable::Tensor const& position_ids,   // [N] int64
+     torch::stable::Tensor const& cos_sin_cache,  // [max_pos, rope_dim] bf16
+     int64_t q_head_padded,                       // padded Q head count for output
+-    double eps, int64_t cache_block_size) {
++    double eps, int64_t cache_block_size, bool use_nvfp4) {
+   STD_TORCH_CHECK(q_in.device().is_cuda() && q_in.is_contiguous(),
+                   "q_in must be contiguous CUDA");
+   STD_TORCH_CHECK(kv.device().is_cuda() && kv.is_contiguous(),
+@@ -1018,7 +1101,7 @@ torch::stable::Tensor fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert(
+                 cos_sin_cache.const_data_ptr<float>(), static_cast<float>(eps),
+                 num_tokens_full, num_tokens_insert, num_heads_q,
+                 num_heads_q_padded, cache_block_size_i, kv_block_stride,
+-                stream);
++                use_nvfp4, stream);
+       });
+   return q_out;
+ }
+diff --git a/csrc/libtorch_stable/ops.h b/csrc/libtorch_stable/ops.h
+index dad2ba9da574e3eb6099b039445921ed1aba8392..06fd079f135d38dd3015bd3dda8d4afcdbc2c7e2 100644
+--- a/csrc/libtorch_stable/ops.h
++++ b/csrc/libtorch_stable/ops.h
+@@ -273,7 +273,7 @@ torch::stable::Tensor fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert(
+     torch::stable::Tensor& k_cache, torch::stable::Tensor const& slot_mapping,
+     torch::stable::Tensor const& position_ids,
+     torch::stable::Tensor const& cos_sin_cache, int64_t q_head_padded,
+-    double eps, int64_t cache_block_size);
++    double eps, int64_t cache_block_size, bool use_nvfp4);
+ 
+ void fused_deepseek_v4_qnorm_rope_kv_rope_full_cache_bf16_insert(
+     torch::stable::Tensor& q, torch::stable::Tensor const& kv,
+diff --git a/csrc/libtorch_stable/quantization/fp4/nvfp4_utils.cuh b/csrc/libtorch_stable/quantization/fp4/nvfp4_utils.cuh
+index 667138f34873d05d9757a1fb374abf7e7f36959d..d74cc829cae3ee774e37122a0dcf31346853ef48 100644
+--- a/csrc/libtorch_stable/quantization/fp4/nvfp4_utils.cuh
++++ b/csrc/libtorch_stable/quantization/fp4/nvfp4_utils.cuh
+@@ -37,6 +37,48 @@ constexpr int CVT_FP4_SF_VEC_SIZE = 16;
+ 
+ namespace vllm {
+ 
++// SM12x (including GB10/SM121) does not implement the SM100-only
++// cvt.rn.satfinite.e2m1x2.f32 instruction. Use the software conversion from
++// vllm-project/vllm#35947, including round-to-nearest-even midpoint handling.
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ != 1000
++__device__ __forceinline__ uint8_t sw_float_to_e2m1(float v) {
++  uint8_t sign = (__float_as_uint(v) >> 31) & 1;
++  float av = fabsf(v);
++  uint8_t e2m1;
++  if (av <= 0.25f)
++    e2m1 = 0;
++  else if (av < 0.75f)
++    e2m1 = 1;
++  else if (av <= 1.25f)
++    e2m1 = 2;
++  else if (av < 1.75f)
++    e2m1 = 3;
++  else if (av <= 2.5f)
++    e2m1 = 4;
++  else if (av < 3.5f)
++    e2m1 = 5;
++  else if (av <= 5.0f)
++    e2m1 = 6;
++  else
++    e2m1 = 7;
++  return (sign << 3) | e2m1;
++}
++
++__device__ __forceinline__ uint8_t sw_e2m1x2_from_f32(float hi, float lo) {
++  return (sw_float_to_e2m1(hi) << 4) | sw_float_to_e2m1(lo);
++}
++
++__device__ __forceinline__ uint32_t sw_fp32_vec8_to_e2m1(
++    const float2* array) {
++  uint8_t b0 = sw_e2m1x2_from_f32(array[0].y, array[0].x);
++  uint8_t b1 = sw_e2m1x2_from_f32(array[1].y, array[1].x);
++  uint8_t b2 = sw_e2m1x2_from_f32(array[2].y, array[2].x);
++  uint8_t b3 = sw_e2m1x2_from_f32(array[3].y, array[3].x);
++  return (uint32_t)b0 | ((uint32_t)b1 << 8) | ((uint32_t)b2 << 16) |
++         ((uint32_t)b3 << 24);
++}
++#endif
++
+ template <typename Int>
+ __host__ __device__ inline Int round_up(Int x, Int y) {
+   static_assert(std::is_integral_v<Int>,
+@@ -70,6 +112,9 @@ inline std::pair<int64_t, int64_t> computeSwizzledSFShape(int64_t m,
+ // Convert 8 float32 values into 8 e2m1 values (represented as one uint32_t).
+ inline __device__ uint32_t fp32_vec8_to_e2m1(float (&array)[8]) {
+   uint32_t val;
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ != 1000
++  val = sw_fp32_vec8_to_e2m1(reinterpret_cast<const float2*>(array));
++#else
+   asm volatile(
+       "{\n"
+       ".reg .b8 byte0;\n"
+@@ -85,12 +130,16 @@ inline __device__ uint32_t fp32_vec8_to_e2m1(float (&array)[8]) {
+       : "=r"(val)
+       : "f"(array[0]), "f"(array[1]), "f"(array[2]), "f"(array[3]),
+         "f"(array[4]), "f"(array[5]), "f"(array[6]), "f"(array[7]));
++#endif
+   return val;
+ }
+ 
+ // Convert 4 float2 values into 8 e2m1 values (represented as one uint32_t).
+ __device__ __forceinline__ uint32_t fp32_vec8_to_e2m1(float2 (&array)[4]) {
+   uint32_t val;
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ != 1000
++  val = sw_fp32_vec8_to_e2m1(array);
++#else
+   asm volatile(
+       "{\n"
+       ".reg .b8 byte0;\n"
+@@ -106,6 +155,7 @@ __device__ __forceinline__ uint32_t fp32_vec8_to_e2m1(float2 (&array)[4]) {
+       : "=r"(val)
+       : "f"(array[0].x), "f"(array[0].y), "f"(array[1].x), "f"(array[1].y),
+         "f"(array[2].x), "f"(array[2].y), "f"(array[3].x), "f"(array[3].y));
++#endif
+   return val;
+ }
+ 
+@@ -117,6 +167,10 @@ using fp4_packed_t = std::conditional_t<CVT_FP4_PACK16, u32x2, uint32_t>;
+ 
+ __device__ __forceinline__ u32x2 fp32_vec16_to_e2m1(float2 (&array)[8]) {
+   u32x2 out;
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ != 1000
++  out.lo = sw_fp32_vec8_to_e2m1(array);
++  out.hi = sw_fp32_vec8_to_e2m1(array + 4);
++#else
+   asm volatile(
+       "{\n"
+       ".reg .b8 b0;\n"
+@@ -143,6 +197,7 @@ __device__ __forceinline__ u32x2 fp32_vec16_to_e2m1(float2 (&array)[8]) {
+         "f"(array[2].x), "f"(array[2].y), "f"(array[3].x), "f"(array[3].y),
+         "f"(array[4].x), "f"(array[4].y), "f"(array[5].x), "f"(array[5].y),
+         "f"(array[6].x), "f"(array[6].y), "f"(array[7].x), "f"(array[7].y));
++#endif
+   return out;
+ }
+ 
+diff --git a/csrc/libtorch_stable/torch_bindings.cpp b/csrc/libtorch_stable/torch_bindings.cpp
+index 156e32f7ab020468b524e1c1706bd7aecc610e2c..1abe078fc87c073a4e480ee5f8f8e5ffcbf76a78 100644
+--- a/csrc/libtorch_stable/torch_bindings.cpp
++++ b/csrc/libtorch_stable/torch_bindings.cpp
+@@ -28,9 +28,9 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+       "output_s, int group_size, float eps, float int8_min, float int8_max) -> "
+       "()");
+   ops.def("permute_cols(Tensor A, Tensor perm) -> Tensor");
+-
+   ops.def("get_cuda_view_from_cpu_tensor(Tensor cpu_tensor) -> Tensor");
+ 
++
+ #ifndef USE_ROCM
+ 
+   // Note about marlin kernel 'workspace' arguments:
+@@ -436,7 +436,8 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+       "fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert("
+       "Tensor q_in, Tensor kv, Tensor! k_cache, "
+       "Tensor slot_mapping, Tensor position_ids, Tensor cos_sin_cache, "
+-      "int q_head_padded, float eps, int cache_block_size) -> Tensor");
++      "int q_head_padded, float eps, int cache_block_size, "
++      "bool use_nvfp4=False) -> Tensor");
+ 
+   // FlashInfer V4 full-cache variants: write Q in place (bf16) or to a separate
+   // FP8 tensor, and KV into a contiguous 512-wide token-strided cache.
+@@ -745,6 +746,8 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
+ }
+ 
+ STABLE_TORCH_LIBRARY_IMPL(_C, CPU, ops) {
++  // The argument is a pinned CPU tensor. The implementation returns a CUDA
++  // UVA view, but dispatch must follow the input tensor's CPU key.
+   ops.impl("get_cuda_view_from_cpu_tensor",
+            TORCH_BOX(&get_cuda_view_from_cpu_tensor));
+ }
+diff --git a/serve-ds4-flash.sh b/serve-ds4-flash.sh
+index f9a640bed07f8e82381274cc027f6723c9ed57d5..af417831b9f6eb2b6ca77fc110b423a6ee45d62e 100755
+--- a/serve-ds4-flash.sh
++++ b/serve-ds4-flash.sh
+@@ -432,8 +432,14 @@ mkdir -p \
+   "${TORCHINDUCTOR_CACHE_DIR}" "${TORCH_EXTENSIONS_DIR}" \
+   "${FLASHINFER_WORKSPACE_BASE}"
+ 
+-command=(
+-  vllm serve "${model}"
++if [[ -n "${VLLM_PYTHON:-}" ]]; then
++  command=("${VLLM_PYTHON}" -m vllm.entrypoints.cli.main)
++else
++  command=(vllm)
++fi
++
++command+=(
++  serve "${model}"
+   "${revision_args[@]}"
+   --served-model-name "${served_model_name}"
+   --host "${host}"
+diff --git a/tests/kernels/test_fused_deepseek_v4_qnorm_rope_kv_insert.py b/tests/kernels/test_fused_deepseek_v4_qnorm_rope_kv_insert.py
+index ed163a0472ad4590a134f96dcae0382b5ccd618f..3c780aa12c2f157a9e435b4debc4a296d6127b86 100644
+--- a/tests/kernels/test_fused_deepseek_v4_qnorm_rope_kv_insert.py
++++ b/tests/kernels/test_fused_deepseek_v4_qnorm_rope_kv_insert.py
+@@ -27,7 +27,9 @@ from vllm.models.deepseek_v4.common.ops import (
+     dequantize_and_gather_k_cache,
+     quantize_and_insert_k_cache,
+ )
++from vllm.models.deepseek_v4.common.ops.fused_indexer_q import _fp32x2_to_fp4x2
+ from vllm.platforms import current_platform
++from vllm.triton_utils import tl, triton
+ 
+ # ── Constants matching the kernel ────────────────────────────────────────────
+ HEAD_DIM = 512
+@@ -146,7 +148,16 @@ pytestmark = pytest.mark.skipif(
+ 
+ 
+ def _call_fused(
+-    q_in, q_head_padded, kv, k_cache, slot_mapping, positions, cos_sin_cache, eps, bs
++    q_in,
++    q_head_padded,
++    kv,
++    k_cache,
++    slot_mapping,
++    positions,
++    cos_sin_cache,
++    eps,
++    bs,
++    use_nvfp4=False,
+ ):
+     return torch.ops._C.fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert(
+         q_in,
+@@ -158,9 +169,90 @@ def _call_fused(
+         q_head_padded,
+         eps,
+         bs,
++        use_nvfp4,
+     )
+ 
+ 
++def _dequant_nvfp4_record(record: torch.Tensor) -> torch.Tensor:
++    packed = record[:256]
++    nibbles = torch.stack((packed & 0xF, packed >> 4), dim=-1).reshape(512)
++    magnitude = torch.tensor(
++        [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0],
++        dtype=torch.float32,
++        device=record.device,
++    )
++    values = magnitude[(nibbles & 0x7).long()]
++    values = torch.where((nibbles & 0x8).bool(), -values, values)
++    scales = record[256:288].contiguous().view(torch.float8_e4m3fn).float()
++    return values * scales.repeat_interleave(16)
++
++
++@triton.jit
++def _pack_e2m1_kernel(x_lo, x_hi, output, width: tl.constexpr):
++    offsets = tl.arange(0, width)
++    lo = tl.load(x_lo + offsets)
++    hi = tl.load(x_hi + offsets)
++    tl.store(output + offsets, _fp32x2_to_fp4x2(lo, hi))
++
++
++def test_sm121_software_e2m1_pack_matches_reference():
++    lo = torch.tensor(
++        [-7.0, -5.0, -3.0, -1.5, -0.5, 0.0, 1.0, 4.0],
++        dtype=torch.float32,
++        device="cuda",
++    )
++    hi = torch.tensor(
++        [6.0, 3.5, 2.5, 1.75, 0.75, 0.25, -1.0, -4.0],
++        dtype=torch.float32,
++        device="cuda",
++    )
++    output = torch.empty(8, dtype=torch.uint8, device="cuda")
++    _pack_e2m1_kernel[(1,)](lo, hi, output, width=8)
++    expected = torch.tensor(
++        [0x7F, 0x6E, 0x4D, 0x4B, 0x29, 0x00, 0xA2, 0xE6],
++        dtype=torch.uint8,
++        device="cuda",
++    )
++    torch.testing.assert_close(output, expected, rtol=0, atol=0)
++
++
++def test_nvfp4_kv_record_matches_432_byte_contract():
++    torch.manual_seed(17)
++    device = "cuda"
++    eps = 1e-6
++    block_size = 64
++    q = torch.randn(1, 8, HEAD_DIM, dtype=torch.bfloat16, device=device)
++    kv = torch.randn(1, HEAD_DIM, dtype=torch.bfloat16, device=device)
++    positions = torch.tensor([37], dtype=torch.int64, device=device)
++    cos_sin = make_cos_sin_cache(128, ROPE_DIM, torch.float32, device)
++    cache = torch.zeros(1, block_size, 432, dtype=torch.uint8, device=device)
++    slot_mapping = torch.zeros(1, dtype=torch.int64, device=device)
++
++    _call_fused(
++        q,
++        8,
++        kv,
++        cache.view(1, -1),
++        slot_mapping,
++        positions,
++        cos_sin,
++        eps,
++        block_size,
++        use_nvfp4=True,
++    )
++
++    record = cache[0, 0]
++    assert torch.count_nonzero(record[:288]) > 0
++    assert torch.count_nonzero(record[288:304]) == 0
++    rotated = apply_rope_gptj_last_k(kv.float(), positions, cos_sin)[0]
++    rope = record[304:432].contiguous().view(torch.bfloat16).float()
++    torch.testing.assert_close(rope, rotated[NOPE_DIM:].float(), rtol=0, atol=0.02)
++    dequant = _dequant_nvfp4_record(record)
++    assert torch.nn.functional.cosine_similarity(
++        dequant, rotated.float(), dim=0
++    ).item() > 0.99
++
++
+ def _as_stored_fp8(t: torch.Tensor) -> torch.Tensor:
+     """Reinterpret a float8_e4m3fn-typed kernel output under the real (FNUZ on
+     gfx942) encoding the kernel actually wrote, without touching the bytes."""
+diff --git a/tests/quantization/test_exl3.py b/tests/quantization/test_exl3.py
+index 5f6c72d43d1b9a7c46e3a13d813fe7cea56e0d76..46c4d6f5c726cbeffb90592e51dc6ab8a925bc7d 100644
+--- a/tests/quantization/test_exl3.py
++++ b/tests/quantization/test_exl3.py
+@@ -17,6 +17,7 @@ from vllm.model_executor.layers.quantization.exl3 import (
+     Exl3MoEParameter,
+ )
+ from vllm.model_executor.models import glm4_moe
++from vllm.models.deepseek_v4.quant_config import DeepseekV4FP8Config
+ 
+ 
+ def _rank_sliced_metadata(**overrides):
+@@ -118,6 +119,94 @@ def test_rank_sliced_metadata_admits_only_declared_moe_layers():
+     )
+ 
+ 
++def test_rank_sliced_metadata_accepts_deepseek_v4_source_schema():
++    metadata = _rank_sliced_metadata(
++        moe_layers=[0, 42],
++        tensor_schema=(
++            "layers.{L}.ffn.experts.{E}.{proj}.rank{r}.{trellis|suh|svh|mcg}"
++        ),
++    )
++    config = Exl3Config()
++
++    config.maybe_update_config(
++        "unused",
++        SimpleNamespace(hybrid_tr3_tail=metadata),
++    )
++
++    assert config._moe_prefix_is_exl3("model.layers.0.ffn.experts")
++    assert config._moe_prefix_is_exl3("model.layers.42.ffn.experts")
++    assert not config._moe_prefix_is_exl3("model.layers.43.ffn.experts")
++
++
++def test_rank_sliced_deepseek_restores_carried_fp8_quantization():
++    metadata = _rank_sliced_metadata(
++        moe_layers=[0, 42],
++        tensor_schema=(
++            "layers.{L}.ffn.experts.{E}.{proj}.rank{r}.{trellis|suh|svh|mcg}"
++        ),
++    )
++    source_fp8 = {
++        "quant_method": "fp8",
++        "activation_scheme": "dynamic",
++        "weight_block_size": [128, 128],
++    }
++    config = Exl3Config.from_config(
++        {"bits": 3.0, "base_quantization_config": source_fp8}
++    )
++
++    config.maybe_update_config(
++        "unused",
++        SimpleNamespace(
++            hybrid_tr3_tail=metadata,
++            model_type="deepseek_v4",
++        ),
++    )
++
++    assert Exl3Config.HYBRID_DEEPSEEK_V4_FP8_CARRY is True
++    assert isinstance(config._base_quant_config, DeepseekV4FP8Config)
++    assert config._base_quant_config.weight_block_size == [128, 128]
++
++
++def test_rank_sliced_deepseek_delegates_non_exl3_modules():
++    config = Exl3Config()
++    sentinel = object()
++
++    class Delegate:
++        def get_quant_method(self, layer, prefix):
++            assert isinstance(layer, torch.nn.LayerNorm)
++            assert prefix == "model.norm"
++            return sentinel
++
++    config.rank_sliced_metadata = _rank_sliced_metadata()
++    config._base_quant_config = Delegate()
++
++    assert config.get_quant_method(torch.nn.LayerNorm(8), "model.norm") is sentinel
++
++
++def test_rank_sliced_metadata_structurally_accepts_k2_mixed_payloads(monkeypatch):
++    config = Exl3Config()
++    metadata = _rank_sliced_metadata(
++        bits="mixed",
++        bits_per_expert="tier_bitmap.json:k",
++        k_values=[2, 3],
++        experts_per_layer=2,
++        moe_layers=[3, 3],
++    )
++    monkeypatch.setattr(
++        exl3_module,
++        "get_hf_file_to_dict",
++        lambda filename, model_name, revision=None: {"3": {"k": [2, 3]}},
++    )
++
++    config.maybe_update_config(
++        "unused",
++        SimpleNamespace(hybrid_tr3_tail=metadata, _commit_hash="revision"),
++    )
++
++    assert config.rank_sliced_k_values == (2, 3)
++    assert config.rank_sliced_layer_bitrates("model.layers.3.ffn.experts") == (2, 3)
++
++
+ def test_mixed_rank_sliced_metadata_hydrates_per_layer_bitrates(monkeypatch):
+     metadata = _rank_sliced_metadata(
+         bits="mixed",
+diff --git a/tests/v1/core/test_kv_cache_utils.py b/tests/v1/core/test_kv_cache_utils.py
+index 3e385aee88e21081ce5c2d31cec2d314297a4f36..0829145a9183fd09ca872b3ffbeec07080ba43a3 100644
+--- a/tests/v1/core/test_kv_cache_utils.py
++++ b/tests/v1/core/test_kv_cache_utils.py
+@@ -1546,16 +1546,20 @@ def _make_dsv4_vllm_config(dcp: int):
+     )
+ 
+ 
+-def _make_dsv4_heterogeneous_kv_cache_specs():
++def _make_dsv4_heterogeneous_kv_cache_specs(
++    cache_dtype: str = "fp8_ds_mla",
++):
++    packed_alignment = 432 if cache_dtype == "nvfp4_ds_mla" else 576
++
+     def full_mla_spec(compress_ratio: int):
+         return MLAAttentionSpec(
+             block_size=256,
+             num_kv_heads=1,
+             head_size=512,
+             dtype=torch.uint8,
+-            cache_dtype_str="fp8_ds_mla",
++            cache_dtype_str=cache_dtype,
+             compress_ratio=compress_ratio,
+-            alignment=576,
++            alignment=packed_alignment,
+             model_version="deepseek_v4",
+         )
+ 
+@@ -1566,7 +1570,7 @@ def _make_dsv4_heterogeneous_kv_cache_specs():
+             head_size=132,
+             dtype=torch.uint8,
+             compress_ratio=4,
+-            alignment=576,
++            alignment=576 if cache_dtype == "fp8_ds_mla" else 512,
+         )
+ 
+     def swa_cache_spec():
+@@ -1576,8 +1580,8 @@ def _make_dsv4_heterogeneous_kv_cache_specs():
+             head_size=512,
+             dtype=torch.uint8,
+             sliding_window=128,
+-            cache_dtype_str="fp8_ds_mla",
+-            alignment=576,
++            cache_dtype_str=cache_dtype,
++            alignment=packed_alignment,
+             model_version="deepseek_v4",
+         )
+ 
+@@ -1589,7 +1593,7 @@ def _make_dsv4_heterogeneous_kv_cache_specs():
+             head_size=2 * (1 + overlap) * 512,
+             dtype=torch.float32,
+             sliding_window=(1 + overlap) * compress_ratio,
+-            alignment=576,
++            alignment=576 if cache_dtype == "fp8_ds_mla" else 512,
+             dcp_sharded=True,
+         )
+ 
+@@ -1621,6 +1625,25 @@ def _make_dsv4_heterogeneous_kv_cache_groups():
+     return kv_cache_utils._get_kv_cache_groups_uniform_groups(grouped_specs)
+ 
+ 
++def test_dsv4_nvfp4_pads_full_mla_anchor_for_compressor_state():
++    specs = _make_dsv4_heterogeneous_kv_cache_specs("nvfp4_ds_mla")
++    grouped_specs = kv_cache_utils.group_and_unify_kv_cache_specs(specs)
++    assert grouped_specs is not None
++
++    groups = kv_cache_utils._get_kv_cache_groups_uniform_groups(grouped_specs)
++
++    full_group = groups[0].kv_cache_spec
++    assert isinstance(full_group, UniformTypeKVCacheSpecs)
++    # A logical 64-token NVFP4 page is 64 * 432 = 27,648 bytes. It is
++    # physically padded to the 32 KiB compressor-state page shared by DSV4.
++    assert max(full_group.get_page_sizes()) == 32_768
++    assert all(
++        max(group.kv_cache_spec.get_page_sizes()) <= 32_768
++        for group in groups
++        if isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
++    )
++
++
+ def test_dsv4_max_concurrency_uses_uniform_group_pool_math():
+     kv_cache_groups = _make_dsv4_heterogeneous_kv_cache_groups()
+ 
+diff --git a/vllm/model_executor/layers/fused_moe/router/fused_topk_bias_router.py b/vllm/model_executor/layers/fused_moe/router/fused_topk_bias_router.py
+index 1ddcaa50e83b25aa05f3d1ba287aea6429bc9966..32c1965a76f30d7028bbff4bd01c0eb1b3d6166c 100644
+--- a/vllm/model_executor/layers/fused_moe/router/fused_topk_bias_router.py
++++ b/vllm/model_executor/layers/fused_moe/router/fused_topk_bias_router.py
+@@ -16,6 +16,16 @@ from vllm.model_executor.layers.fused_moe.config import (
+ from vllm.model_executor.layers.fused_moe.router.base_router import BaseRouter
+ 
+ 
++_NATIVE_TOPK_SOFTPLUS_SQRT_EXPERT_COUNTS = frozenset(
++    {1, 2, 4, 8, 16, 32, 64, 128, 192, 256, 320, 384, 448, 512, 576}
++)
++
++
++def _native_topk_softplus_sqrt_supports(num_experts: int) -> bool:
++    """Whether the compiled CUDA/ROCm launcher has this specialization."""
++    return num_experts in _NATIVE_TOPK_SOFTPLUS_SQRT_EXPERT_COUNTS
++
++
+ def vllm_topk_softmax(
+     topk_weights: torch.Tensor,
+     topk_indices: torch.Tensor,
+@@ -117,7 +127,12 @@ def vllm_topk_softplus_sqrt(
+ ) -> tuple[torch.Tensor, ...]:
+     from vllm.platforms import current_platform
+ 
+-    if current_platform.is_xpu():
++    # Pruned MoE checkpoints can retain a nonstandard number of experts. Use
++    # the exact PyTorch implementation when the native launcher has no matching
++    # specialization instead of padding, dropping, or remapping experts.
++    if current_platform.is_xpu() or not _native_topk_softplus_sqrt_supports(
++        gating_output.shape[-1]
++    ):
+         return _topk_softplus_sqrt_torch(
+             topk_weights,
+             topk_indices,
+diff --git a/vllm/model_executor/layers/quantization/exl3.py b/vllm/model_executor/layers/quantization/exl3.py
+index a625a000728d4d812eca4a32710bb7f553cb6060..95bcd402d0aacccf55ab154114ae2a8932826bce 100644
+--- a/vllm/model_executor/layers/quantization/exl3.py
++++ b/vllm/model_executor/layers/quantization/exl3.py
+@@ -75,6 +75,11 @@ _MIXED_TRELLIS_RUNTIMES: dict[tuple[Any, ...], dict[str, Any]] = {}
+ _NEXT_RUNTIME_SCOPE_ID = 0
+ _MIXED_TRELLIS_ROUTE_BLOCK_SIZE = 8
+ 
++# Launchers for hybrid DeepSeek V4 artifacts require this exact marker before
++# allocating GPUs. It means non-expert source FP8 modules are delegated to the
++# native DeepSeek V4 quantizer while backbone routed experts stay EXL3.
++EXL3_DEEPSEEK_V4_HYBRID_QUANT = True
++
+ 
+ # Smallest m the Trellis kernel path can service, and therefore the smallest
+ # row count an EXL3 rank-sliced MoE layer can be CUDA-graph captured at. A
+@@ -154,6 +159,12 @@ def _runtime_scope_id(quant_config: Any) -> int:
+ 
+ 
+ _RANK_SLICED_FORMAT = "exl3-trellis"
++_RANK_SLICED_TENSOR_SCHEMAS = frozenset(
++    {
++        ("model.layers.{L}.mlp.experts.{E}.{proj}.rank{r}.{trellis|suh|svh|mcg}"),
++        ("layers.{L}.ffn.experts.{E}.{proj}.rank{r}.{trellis|suh|svh|mcg}"),
++    }
++)
+ _RANK_SLICED_WEIGHT_RE = re.compile(
+     r"^(?P<prefix>.+)\.rank(?P<rank>\d+)\."
+     r"(?P<field>trellis|suh|svh|mcg|mul1)$"
+@@ -341,6 +352,8 @@ def _exl3_gemm_fake(
+ class Exl3Config(QuantizationConfig):
+     """Configuration for modern and legacy EXL3 trellis checkpoints."""
+ 
++    HYBRID_DEEPSEEK_V4_FP8_CARRY = True
++
+     def __init__(
+         self,
+         bits: float | None = None,
+@@ -348,6 +361,7 @@ class Exl3Config(QuantizationConfig):
+         codebook: str | None = None,
+         version: str | None = None,
+         tensor_storage: dict[str, Any] | None = None,
++        base_quantization_config: dict[str, Any] | None = None,
+     ) -> None:
+         super().__init__()
+         self.bits = bits
+@@ -355,6 +369,8 @@ class Exl3Config(QuantizationConfig):
+         self.codebook = codebook
+         self.version = version
+         self.tensor_storage = tensor_storage or {}
++        self.base_quantization_config = base_quantization_config or {}
++        self._base_quant_config: QuantizationConfig | None = None
+         self._eager_checked = False
+         self.rank_sliced_metadata: dict[str, Any] | None = None
+         self.rank_sliced_k_values: tuple[int, ...] | None = None
+@@ -384,6 +400,7 @@ class Exl3Config(QuantizationConfig):
+             codebook=config.get("codebook"),
+             version=config.get("version"),
+             tensor_storage=config.get("tensor_storage"),
++            base_quantization_config=config.get("base_quantization_config"),
+         )
+ 
+     @classmethod
+@@ -413,6 +430,7 @@ class Exl3Config(QuantizationConfig):
+             and rank_sliced.get("format") == _RANK_SLICED_FORMAT
+         ):
+             self._configure_rank_sliced(rank_sliced)
++            self._configure_base_quantization(hf_config)
+             if self.rank_sliced_k_values is not None:
+                 resolved_revision = revision
+                 if resolved_revision is None and hf_config is not None:
+@@ -449,6 +467,41 @@ class Exl3Config(QuantizationConfig):
+         self._validate_storage_metadata()
+         self._force_independent_lm_head(hf_config)
+ 
++    def _configure_base_quantization(
++        self, hf_config: PretrainedConfig | None
++    ) -> None:
++        """Restore the carried DeepSeek V4 FP8 path beside EXL3 experts.
++
++        Rank-sliced DeepSeek releases replace only the 43 backbone routed
++        experts. Attention, dense/shared projections, and the retained MTP
++        blocks keep the source checkpoint's block-FP8/FP4 representation, so
++        returning ``UnquantizedLinearMethod`` for those modules creates the
++        wrong parameters and scale-loading contract.
++        """
++
++        base = self.base_quantization_config
++        if not base and hf_config is not None:
++            candidate = getattr(hf_config, "exl3_base_quantization_config", None)
++            if isinstance(candidate, dict):
++                base = candidate
++                self.base_quantization_config = dict(candidate)
++        if not base:
++            return
++        if hf_config is None or getattr(hf_config, "model_type", None) != "deepseek_v4":
++            raise ValueError(
++                "EXL3 base_quantization_config is currently supported only for "
++                "DeepSeek V4 rank-sliced checkpoints"
++            )
++        method = str(base.get("quant_method", "")).lower()
++        if method not in {"fp8", "deepseek_v4_fp8"}:
++            raise ValueError(
++                "DeepSeek V4 EXL3 carried tensors require the source FP8 "
++                f"quantization config, got quant_method={method!r}"
++            )
++        from vllm.models.deepseek_v4.quant_config import DeepseekV4FP8Config
++
++        self._base_quant_config = DeepseekV4FP8Config.from_config(dict(base))
++
+     def _configure_rank_sliced(self, metadata: dict[str, Any]) -> None:
+         required = {
+             "bits",
+@@ -476,10 +529,7 @@ class Exl3Config(QuantizationConfig):
+             or int(layers[1]) < int(layers[0])
+         ):
+             raise ValueError("rank-sliced EXL3 moe_layers must be [first, last]")
+-        expected_schema = (
+-            "model.layers.{L}.mlp.experts.{E}.{proj}.rank{r}.{trellis|suh|svh|mcg}"
+-        )
+-        if metadata["tensor_schema"] != expected_schema:
++        if metadata["tensor_schema"] not in _RANK_SLICED_TENSOR_SCHEMAS:
+             raise ValueError(
+                 "unsupported rank-sliced EXL3 tensor schema: "
+                 f"{metadata['tensor_schema']!r}"
+@@ -490,9 +540,9 @@ class Exl3Config(QuantizationConfig):
+             k_values = tuple(
+                 sorted({int(value) for value in metadata.get("k_values", ())})
+             )
+-            if not k_values or any(value not in (3, 4, 5, 6) for value in k_values):
++            if not k_values or any(value not in (2, 3, 4, 5, 6) for value in k_values):
+                 raise ValueError(
+-                    "mixed rank-sliced EXL3 requires k_values within 3..6, got "
++                    "mixed rank-sliced EXL3 requires k_values within 2..6, got "
+                     f"{metadata.get('k_values')!r}"
+                 )
+             if not isinstance(metadata.get("bits_per_expert"), str):
+@@ -580,6 +630,8 @@ class Exl3Config(QuantizationConfig):
+         # source-matrix discovery intentionally refers to the unstacked HF name.
+         mapped = hf_to_vllm_mapper.apply_dict(self.tensor_storage)
+         self.tensor_storage = {**self.tensor_storage, **mapped}
++        if self._base_quant_config is not None:
++            self._base_quant_config.apply_vllm_mapper(hf_to_vllm_mapper)
+ 
+     def _validate_storage_metadata(self) -> None:
+         bad: list[str] = []
+@@ -659,12 +711,18 @@ class Exl3Config(QuantizationConfig):
+             prefix = "lm_head"
+         if isinstance(layer, LinearBase) or is_lm_head:
+             if not self._linear_prefix_is_exl3(prefix):
++                if self._base_quant_config is not None:
++                    return self._base_quant_config.get_quant_method(layer, prefix)
+                 return UnquantizedLinearMethod()
+             return Exl3LinearMethod(self)
+         if isinstance(layer, RoutedExperts):
+             if not self._moe_prefix_is_exl3(prefix, layer):
++                if self._base_quant_config is not None:
++                    return self._base_quant_config.get_quant_method(layer, prefix)
+                 return None
+             return Exl3MoEMethod(self, layer.moe_config)
++        if self._base_quant_config is not None:
++            return self._base_quant_config.get_quant_method(layer, prefix)
+         return None
+ 
+     def _storage_entry(self, prefix: str) -> dict[str, Any] | None:
+@@ -1593,6 +1651,12 @@ class Exl3MoEMethod(FusedMoEMethodBase):
+                 "the one-grid mixed Trellis path currently requires exactly two "
+                 f"bitrates, got {tuple(tiers)}"
+             )
++        unsupported = sorted(set(tiers).difference((3, 4, 5, 6)))
++        if unsupported:
++            raise NotImplementedError(
++                "the installed rank-sliced EXL3 fused runtime accepts only K3-K6; "
++                f"the checkpoint contains K{unsupported[0]} payloads"
++            )
+ 
+         w13_param = layer.w13_trellis
+         w2_param = layer.w2_trellis
+@@ -2003,12 +2067,16 @@ class Exl3MoEMethod(FusedMoEMethodBase):
+         # planned capacity is a property of the layer, not of one forward pass.
+         max_batched_tokens = int(layer.exl3_max_num_batched_tokens)
+         prefill_plan_enabled = prefill_trellis and max_batched_tokens > max_trellis_m
++        max_parity_batch = min(max_batched_tokens, min_trellis_m - 1)
+         parity_rows = (
+-            min(chunk, max_batched_tokens)
+-            if prefill_plan_enabled
+-            else max_batched_tokens
++            0
++            if max_parity_batch == 0
++            else (
++                min(chunk, max_batched_tokens)
++                if prefill_plan_enabled
++                else max_batched_tokens
++            )
+         )
+-        max_parity_batch = min(max_batched_tokens, min_trellis_m - 1)
+         if max_parity_batch > parity_rows:
+             raise ValueError(
+                 "VLLM_EXL3_PREFILL_CHUNK cannot cover the EXL3 parity window: "
+@@ -2082,18 +2150,29 @@ class Exl3MoEMethod(FusedMoEMethodBase):
+                 max_batched_tokens, prefill_block_m
+             )
+ 
+-        ext = _load_exl3_ext()
+-        required_ext = {
+-            "exl3_moe",
+-            "exl3_moe_max_concurrency",
+-        }
+-        missing_ext = sorted(name for name in required_ext if not hasattr(ext, name))
+-        if missing_ext:
+-            raise RuntimeError(
+-                "The EXL3 extension lacks routed-expert entry points: "
+-                + ", ".join(missing_ext)
++        # With a Trellis window starting at m=1 there is no reachable eager
++        # parity batch. Keep the external ExLlamaV3 extension fully lazy and do
++        # not reserve its staging buffers; every live shape is serviced by the
++        # planned SparkInfer decode or prefill path.
++        ext = None
++        concurrency = 0
++        if parity_rows:
++            ext = _load_exl3_ext()
++            required_ext = {
++                "exl3_moe",
++                "exl3_moe_max_concurrency",
++            }
++            missing_ext = sorted(
++                name for name in required_ext if not hasattr(ext, name)
++            )
++            if missing_ext:
++                raise RuntimeError(
++                    "The EXL3 extension lacks routed-expert entry points: "
++                    + ", ".join(missing_ext)
++                )
++            concurrency = int(
++                ext.exl3_moe_max_concurrency(torch.cuda.current_device())
+             )
+-        concurrency = int(ext.exl3_moe_max_concurrency(torch.cuda.current_device()))
+         hidden_size = int(layer.exl3_hidden_size)
+         intermediate_size = int(layer.exl3_intermediate_size_per_partition)
+         num_experts = int(layer.local_num_experts)
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index f098a00beeb746bf39e68af288f2ab9d4d02280d..99337dc65d6c29b29875763e72818a1b1b299cab 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -86,11 +86,15 @@ def _resolve_dsv4_kv_cache_dtype(
+     token's KV row in its element dtype: bf16 or per-tensor FP8 E4M3.
+     """
+     if use_fp8_ds_mla_layout:
+-        # fp8_ds_mla block format: UE8M0 block-scaled fp8 packed as uint8.
+-        assert kv_cache_dtype.startswith("fp8"), (
+-            f"DeepseekV4 fp8_ds_mla layout only supports fp8 kv-cache, "
++        # Sparse MLA packed formats use byte-addressed per-token records.
++        assert kv_cache_dtype.startswith("fp8") or kv_cache_dtype == "nvfp4_ds_mla", (
++            f"DeepseekV4 packed MLA layout only supports fp8_ds_mla or "
++            f"nvfp4_ds_mla, "
+             f"got {kv_cache_dtype}"
+         )
++        if kv_cache_dtype == "nvfp4_ds_mla":
++            logger.info_once("Using DeepSeek's 432-byte NVFP4 MLA KV cache format.")
++            return kv_cache_dtype, torch.uint8
+         if kv_cache_dtype != "fp8_ds_mla":
+             if cache_config is not None:
+                 cache_config.cache_dtype = "fp8_ds_mla"
+@@ -370,6 +374,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 rotate=True,
+                 prefix=f"{prefix}.compressor",
+                 k_cache_prefix=self.prefix,
++                use_fp4_cache=self.kv_cache_dtype == "nvfp4_ds_mla",
+             )
+ 
+     def _validate_wo_projection_tensors(self) -> tuple[int, int, int, int]:
+@@ -781,6 +786,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 self.padded_heads,
+                 self.eps,
+                 swa_metadata.block_size,
++                self.kv_cache_dtype == "nvfp4_ds_mla",
+             )
+ 
+         # Plain-row path: the [num_blocks, block_size, 512] cache stores the KV
+@@ -830,15 +836,24 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         # fp8_ds_mla is a UE8M0 block-scaled uint8 layout and needs 576B
+         # alignment; plain bf16 / per-tensor fp8 rows use natural element-size
+         # pages.
+-        uses_fp8_ds_mla_layout = self.kv_cache_dtype == "fp8_ds_mla"
++        uses_packed_mla_layout = self.kv_cache_dtype in (
++            "fp8_ds_mla",
++            "nvfp4_ds_mla",
++        )
+         return MLAAttentionSpec(
+             block_size=vllm_config.cache_config.block_size,
+             num_kv_heads=1,
+             head_size=self.head_dim,
+-            dtype=torch.uint8 if uses_fp8_ds_mla_layout else self.kv_cache_torch_dtype,
++            dtype=torch.uint8 if uses_packed_mla_layout else self.kv_cache_torch_dtype,
+             compress_ratio=self.compress_ratio,
+             cache_dtype_str=self.kv_cache_dtype,
+-            alignment=576 if uses_fp8_ds_mla_layout else 512,
++            alignment=(
++                432
++                if self.kv_cache_dtype == "nvfp4_ds_mla"
++                else 576
++                if uses_packed_mla_layout
++                else 512
++            ),
+             model_version="deepseek_v4",
+             kv_quant_mode=get_kv_quant_mode(self.kv_cache_dtype),
+         )
+diff --git a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
+index 1473be841ed183d7eb0460f596e3c6e5eabe6f23..6d5fc1ff8024242555ef2e5c8ecbff09249d4b0f 100644
+--- a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
++++ b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
+@@ -250,50 +250,11 @@ def _fused_kv_compress_norm_rope_insert_sparse_attn(
+     kv_pos_in_block = kv_slot_idx % kv_cache_block_size
+ 
+     cache_block_ptr = k_cache_ptr + kv_block_idx.to(tl.int64) * KV_BLOCK_STRIDE
+-    fp8_ptr = cache_block_ptr + kv_pos_in_block * TOKEN_STRIDE
+-    scale_ptr = (
+-        cache_block_ptr
+-        + kv_cache_block_size * TOKEN_STRIDE
+-        + kv_pos_in_block * SCALE_DIM
+-    )
++    value_ptr = cache_block_ptr + kv_pos_in_block * TOKEN_STRIDE
+ 
+     NOPE_HEAD_DIM: tl.constexpr = HEAD_SIZE - ROPE_HEAD_DIM  # 448
+     HALF_ROPE: tl.constexpr = ROPE_HEAD_DIM // 2  # 32
+ 
+-    # FP8 UE8M0 quant: cast fp32 → bf16 → fp32 before quant to match reference.
+-    N_QUANT_BLOCKS: tl.constexpr = TRITON_BLOCK_SIZE // QUANT_BLOCK
+-    N_NOPE_BLOCKS: tl.constexpr = NOPE_HEAD_DIM // QUANT_BLOCK  # 7
+-    INV_FP8_MAX: tl.constexpr = 1.0 / FP8_MAX
+-
+-    quant_input = normed.to(tl.bfloat16).to(tl.float32)
+-    quant_2d = tl.reshape(quant_input, (N_QUANT_BLOCKS, QUANT_BLOCK))
+-    abs_2d = tl.abs(quant_2d)
+-    block_absmax = tl.max(abs_2d, axis=1)  # [N_QUANT_BLOCKS] fp32
+-    block_absmax = tl.maximum(block_absmax, 1e-4)
+-
+-    raw_scales = block_absmax * INV_FP8_MAX
+-    exponents = tl.ceil(tl.log2(raw_scales))
+-    inv_scales = tl.exp2(-exponents)
+-    inv_scales_col = tl.reshape(inv_scales, (N_QUANT_BLOCKS, 1))
+-    x_scaled = quant_2d * inv_scales_col
+-    x_clamped = tl.clamp(x_scaled, -FP8_MAX, FP8_MAX)
+-    x_fp8 = x_clamped.to(tl.float8e4nv)
+-    x_uint8 = x_fp8.to(tl.uint8, bitcast=True)
+-    x_uint8_flat = tl.reshape(x_uint8, (TRITON_BLOCK_SIZE,))
+-
+-    nope_mask = block < NOPE_HEAD_DIM
+-    tl.store(fp8_ptr + block, x_uint8_flat, mask=nope_mask)
+-
+-    scale_idx = tl.arange(0, N_QUANT_BLOCKS)
+-    encoded = exponents + 127.0
+-    encoded = tl.maximum(tl.minimum(encoded, 255.0), 0.0)
+-    tl.store(
+-        scale_ptr + scale_idx,
+-        encoded.to(tl.uint8),
+-        mask=scale_idx < N_NOPE_BLOCKS,
+-    )
+-    tl.store(scale_ptr + N_NOPE_BLOCKS, tl.zeros((), dtype=tl.uint8))
+-
+     # Register-based GPT-J RoPE in fp32.
+     NUM_PAIRS: tl.constexpr = TRITON_BLOCK_SIZE // 2
+     NOPE_PAIRS: tl.constexpr = NOPE_HEAD_DIM // 2
+@@ -314,12 +275,71 @@ def _fused_kv_compress_norm_rope_insert_sparse_attn(
+     new_even = even * cos_v - odd * sin_v
+     new_odd = odd * cos_v + even * sin_v
+     result = tl.interleave(new_even, new_odd)  # [TRITON_BLOCK_SIZE] fp32
+-
+-    # Store rotated rope portion as bf16 into the cache's bf16 area.
+-    bf16_ptr = (fp8_ptr + NOPE_HEAD_DIM).to(tl.pointer_type(tl.bfloat16))
+-    rope_local = block - NOPE_HEAD_DIM
+-    is_rope = (block >= NOPE_HEAD_DIM) & mask
+-    tl.store(bf16_ptr + rope_local, result.to(tl.bfloat16), mask=is_rope)
++    quant_input = result.to(tl.bfloat16).to(tl.float32)
++
++    if QUANT_BLOCK == 16:
++        # DSV4 NVFP4 record: 256B E2M1 + 32B E4M3 group scales + 16B pad
++        # + 128B BF16 RoPE. The complete rotated 512-D latent is quantized so V
++        # consumes all dimensions; K reads dimensions 0:448 plus the BF16 tail.
++        tl.static_assert(TOKEN_STRIDE == 432)
++        tl.static_assert(SCALE_DIM == 32)
++        quant_3d = tl.reshape(quant_input, (32, 8, 2))
++        lo, hi = tl.split(quant_3d)
++        amax = tl.maximum(tl.max(tl.abs(lo), axis=1), tl.max(tl.abs(hi), axis=1))
++        raw_scale = tl.maximum(amax * (1.0 / 6.0), 2**-126)
++        scale_fp8 = raw_scale.to(tl.float8e4nv)
++        scale_f32 = scale_fp8.to(tl.float32)
++        inv_scale = tl.reshape(1.0 / scale_f32, (32, 1))
++        packed = _fp32x2_to_fp4x2(lo * inv_scale, hi * inv_scale)
++        tl.store(value_ptr + tl.arange(0, 256), tl.reshape(packed, (256,)))
++        tl.store(
++            value_ptr + 256 + tl.arange(0, 32),
++            scale_fp8.to(tl.uint8, bitcast=True),
++        )
++        tl.store(value_ptr + 288 + tl.arange(0, 16), 0)
++        rope_ptr = (value_ptr + 304).to(tl.pointer_type(tl.bfloat16))
++        rope_local = block - NOPE_HEAD_DIM
++        tl.store(
++            rope_ptr + rope_local,
++            result.to(tl.bfloat16),
++            mask=(block >= NOPE_HEAD_DIM) & mask,
++        )
++    else:
++        # Legacy DSV4 FP8 record: page-major 576B payload rows followed by an
++        # 8B-per-token UE8M0 footer region.
++        scale_ptr = (
++            cache_block_ptr
++            + kv_cache_block_size * TOKEN_STRIDE
++            + kv_pos_in_block * SCALE_DIM
++        )
++        N_QUANT_BLOCKS: tl.constexpr = TRITON_BLOCK_SIZE // QUANT_BLOCK
++        N_NOPE_BLOCKS: tl.constexpr = NOPE_HEAD_DIM // QUANT_BLOCK
++        quant_2d = tl.reshape(quant_input, (N_QUANT_BLOCKS, QUANT_BLOCK))
++        block_absmax = tl.maximum(tl.max(tl.abs(quant_2d), axis=1), 1e-4)
++        exponents = tl.ceil(tl.log2(block_absmax * (1.0 / FP8_MAX)))
++        inv_scales = tl.reshape(tl.exp2(-exponents), (N_QUANT_BLOCKS, 1))
++        x_fp8 = tl.clamp(
++            quant_2d * inv_scales, -FP8_MAX, FP8_MAX
++        ).to(tl.float8e4nv)
++        x_uint8 = tl.reshape(
++            x_fp8.to(tl.uint8, bitcast=True), (TRITON_BLOCK_SIZE,)
++        )
++        tl.store(value_ptr + block, x_uint8, mask=block < NOPE_HEAD_DIM)
++        scale_idx = tl.arange(0, N_QUANT_BLOCKS)
++        encoded = tl.maximum(tl.minimum(exponents + 127.0, 255.0), 0.0)
++        tl.store(
++            scale_ptr + scale_idx,
++            encoded.to(tl.uint8),
++            mask=scale_idx < N_NOPE_BLOCKS,
++        )
++        tl.store(scale_ptr + N_NOPE_BLOCKS, tl.zeros((), dtype=tl.uint8))
++        bf16_ptr = (value_ptr + NOPE_HEAD_DIM).to(tl.pointer_type(tl.bfloat16))
++        rope_local = block - NOPE_HEAD_DIM
++        tl.store(
++            bf16_ptr + rope_local,
++            result.to(tl.bfloat16),
++            mask=(block >= NOPE_HEAD_DIM) & mask,
++        )
+ 
+ 
+ # =============================================================================
+diff --git a/vllm/models/deepseek_v4/common/ops/fused_indexer_q.py b/vllm/models/deepseek_v4/common/ops/fused_indexer_q.py
+index f87ac9c56dc0addf4b159531707e5ce6383b8fee..0d2f735e3faf16cfb2670011bc82ab0fa09dbb8a 100644
+--- a/vllm/models/deepseek_v4/common/ops/fused_indexer_q.py
++++ b/vllm/models/deepseek_v4/common/ops/fused_indexer_q.py
+@@ -27,23 +27,40 @@ def _get_cos_sin(
+     return cos, sin
+ 
+ 
++@triton.jit
++def _float_to_e2m1(x):
++    magnitude = tl.abs(x)
++    code = tl.where(
++        magnitude <= 0.25,
++        0,
++        tl.where(
++            magnitude < 0.75,
++            1,
++            tl.where(
++                magnitude <= 1.25,
++                2,
++                tl.where(
++                    magnitude < 1.75,
++                    3,
++                    tl.where(
++                        magnitude <= 2.5,
++                        4,
++                        tl.where(
++                            magnitude < 3.5,
++                            5,
++                            tl.where(magnitude <= 5.0, 6, 7),
++                        ),
++                    ),
++                ),
++            ),
++        ),
++    )
++    return code.to(tl.uint8) | ((x < 0).to(tl.uint8) << 3)
++
++
+ @triton.jit
+ def _fp32x2_to_fp4x2(x_lo, x_hi):
+-    # NOTE: $1 is high nibble, $2 is low nibble
+-    return tl.inline_asm_elementwise(
+-        """
+-        {
+-            .reg .b8 tmp;
+-            cvt.rn.satfinite.e2m1x2.f32 tmp, $1, $2;
+-            cvt.u32.u8 $0, tmp;
+-        }
+-        """,
+-        constraints="=r,f,f",
+-        args=[x_hi, x_lo],
+-        dtype=tl.uint32,
+-        is_pure=True,
+-        pack=1,
+-    ).to(tl.uint8)
++    return _float_to_e2m1(x_lo) | (_float_to_e2m1(x_hi) << 4)
+ 
+ 
+ @triton.jit
+diff --git a/vllm/models/deepseek_v4/compressor.py b/vllm/models/deepseek_v4/compressor.py
+index 12ad5f492f6a37bda4002151f8ead0d6317434f7..0b23da5084ea17659adb2b548747454beb4b776b 100644
+--- a/vllm/models/deepseek_v4/compressor.py
++++ b/vllm/models/deepseek_v4/compressor.py
+@@ -285,12 +285,13 @@ class DeepseekCompressor(nn.Module):
+         )
+ 
+         if self.head_dim == 512:
+-            assert not use_fp4_cache, (
+-                "MXFP4 cache is only supported for indexer (head=128)"
++            self._quant_block = 16 if use_fp4_cache else 64
++            self._token_stride = (
++                432
++                if use_fp4_cache
++                else self.nope_head_dim + self.rope_head_dim * 2
+             )
+-            self._quant_block = 64
+-            self._token_stride = self.nope_head_dim + self.rope_head_dim * 2
+-            self._scale_dim = self.nope_head_dim // 64 + 1  # 7 real + 1 pad
++            self._scale_dim = 32 if use_fp4_cache else self.nope_head_dim // 64 + 1
+         elif self.head_dim == 128:
+             if use_fp4_cache:
+                 self._quant_block = MXFP4_BLOCK_SIZE
+@@ -392,7 +393,9 @@ class DeepseekCompressor(nn.Module):
+         extra_kwargs: dict[str, Any] = {}
+         if current_platform.is_cuda() and not torch.compiler.is_compiling():
+             # NVIDIA GPUs.
+-            use_triton_compressor = self.head_dim != 512 or dcp_world_size > 1
++            use_triton_compressor = (
++                self.head_dim != 512 or dcp_world_size > 1 or self.use_fp4_cache
++            )
+             if not use_triton_compressor:
+                 from .nvidia.ops.sparse_attn_compress_cutedsl import (
+                     compress_norm_rope_store_cutedsl,
+diff --git a/vllm/models/deepseek_v4/nvidia/b12x.py b/vllm/models/deepseek_v4/nvidia/b12x.py
+index 9b26bd1ab599a7bbd45f285b6d55300b30f04a6c..7b098fcb23365784480f9628b62430ce93ae6840 100644
+--- a/vllm/models/deepseek_v4/nvidia/b12x.py
++++ b/vllm/models/deepseek_v4/nvidia/b12x.py
+@@ -43,7 +43,8 @@ if TYPE_CHECKING:
+ # DSV4 compressed-MLA dims (q_head_dim = 448 NoPE + 64 RoPE = 512; V = 512).
+ _DSV4_HEAD_DIM = 512
+ _DSV4_V_HEAD_DIM = 512
+-_DSV4_CACHE_BYTES_PER_TOKEN = 584
++_DSV4_FP8_CACHE_BYTES_PER_TOKEN = 584
++_DSV4_NVFP4_CACHE_BYTES_PER_TOKEN = 432
+ _DSV4_CACHE_PAD_ALIGNMENT_BYTES = 576
+ _DECODE_SPLIT_TILE = 64
+ _C128A_TOPK_ALIGNMENT = 128
+@@ -54,8 +55,10 @@ def _cdiv(x: int, y: int) -> int:
+     return (int(x) + int(y) - 1) // int(y)
+ 
+ 
+-def _dsv4_b12x_page_nbytes(page_size: int) -> int:
+-    payload_nbytes = int(page_size) * _DSV4_CACHE_BYTES_PER_TOKEN
++def _dsv4_b12x_page_nbytes(page_size: int, cache_dtype: str) -> int:
++    if cache_dtype == "nvfp4_ds_mla":
++        return int(page_size) * _DSV4_NVFP4_CACHE_BYTES_PER_TOKEN
++    payload_nbytes = int(page_size) * _DSV4_FP8_CACHE_BYTES_PER_TOKEN
+     return (
+         _cdiv(payload_nbytes, _DSV4_CACHE_PAD_ALIGNMENT_BYTES)
+         * _DSV4_CACHE_PAD_ALIGNMENT_BYTES
+@@ -66,9 +69,10 @@ def _b12x_cache_page_view(
+     cache: torch.Tensor,
+     page_size: int,
+     name: str,
++    cache_dtype: str,
+ ) -> torch.Tensor:
+     """Return a uint8 ``[pages, padded_page_bytes]`` view for b12x kernels."""
+-    page_nbytes = _dsv4_b12x_page_nbytes(page_size)
++    page_nbytes = _dsv4_b12x_page_nbytes(page_size, cache_dtype)
+     if page_nbytes <= 0:
+         raise ValueError(f"{name} page_size must be positive, got {page_size}")
+ 
+@@ -340,6 +344,16 @@ def _run_compressed_mla(
+         return_lse=return_lse,
+         lse_scale=lse_scale,
+         out=output,
++        scale_format=(
++            __import__(
++                "sparkinfer.attention._shared.mla.traits",
++                fromlist=["ScaleFormat"],
++            ).ScaleFormat.NVFP4_E4M3
++            if int(swa_k_cache.shape[1])
++            == int(swa_page_size) * _DSV4_NVFP4_CACHE_BYTES_PER_TOKEN
++            else None
++        ),
++        fp8_rope=False,
+     )
+     if return_lse:
+         _, lse = cast(tuple[torch.Tensor, torch.Tensor], result)
+@@ -471,7 +485,9 @@ class DeepseekV4B12xMLAAttention(DeepseekV4FlashMLAAttention):
+         key = _b12x_cache_page_view_key(cache, page_size)
+         view = views.get(key)
+         if view is None:
+-            view = _b12x_cache_page_view(cache, page_size, name)
++            view = _b12x_cache_page_view(
++                cache, page_size, name, self.kv_cache_dtype
++            )
+             views[key] = view
+         return view
+ 
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index 0bc06e20f34b25773e39ff81701e11e2239b94fb..175c59804e31d638375e5493db1045fdbd53fbfe 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -73,6 +73,9 @@ from vllm.model_executor.models.utils import (
+ from vllm.model_executor.utils import set_weight_attrs
+ from vllm.models.deepseek_v4.attention import DeepseekV4Attention
+ from vllm.models.deepseek_v4.nvidia.b12x import DeepseekV4B12xMLAAttention
++from vllm.models.deepseek_v4.nvidia.exl3_loading import (
++    normalize_rank_sliced_weights,
++)
+ from vllm.models.deepseek_v4.nvidia.flashinfer_sparse import (
+     DeepseekV4FlashInferMLAAttention,
+     DeepseekV4FlashInferSM120Attention,
+@@ -1696,6 +1699,11 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
+ 
+         # Pre-compute expert mapping ONCE.
+         expert_mapping = self.get_expert_mapping()
++        rank_sliced_name = getattr(
++            self.quant_config,
++            "normalize_rank_sliced_weight_name",
++            None,
++        )
+ 
+         # Block-FP8 shared experts: pad the intermediate up to the TP-uniform
+         # block count so the standard loaders below slice it evenly (trailing
+@@ -1705,7 +1713,9 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
+             and not self.parallel_config.use_sequence_parallel_moe
+         )
+ 
+-        for name, loaded_weight in weights:
++        for name, loaded_weight in normalize_rank_sliced_weights(
++            weights, rank_sliced_name
++        ):
+             if pad_shared_expert and ".shared_experts." in name:
+                 loaded_weight = self._pad_shared_expert_weight(name, loaded_weight)
+             for param_name, weight_name, shard_id in stacked_params_mapping:
+@@ -1734,6 +1744,7 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
+                         and loaded_weight.dtype == torch.float8_e8m0fnu
+                     ):
+                         loaded_weight = loaded_weight.view(torch.uint8)
++                    mapped_name = None
+                     for mapping in expert_mapping:
+                         param_name, weight_name, expert_id, expert_shard_id = mapping
+                         if weight_name not in name:
+@@ -1757,9 +1768,16 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
+                             return_success=True,
+                         )
+                         if success:
+-                            name = name_mapped
++                            mapped_name = name_mapped
+                             break
+-                    loaded_params.add(name_mapped)
++                    if mapped_name is None:
++                        if rank_sliced_name is not None:
++                            raise ValueError(
++                                "rank-sliced DeepSeek V4 EXL3 tensor did not map "
++                                f"to a routed-expert parameter: {name}"
++                            )
++                        continue
++                    loaded_params.add(mapped_name)
+                     continue
+                 elif "attn_sink" in name:
+                     if is_pp_missing_parameter(name, self):
+diff --git a/vllm/models/inkling/nvidia/model.py b/vllm/models/inkling/nvidia/model.py
+index bf7f700dee66e89296b9c6f38265de22577ea763..02221fb4c1e2f7e4271c7926f23ff3e54287878c 100644
+--- a/vllm/models/inkling/nvidia/model.py
++++ b/vllm/models/inkling/nvidia/model.py
+@@ -20,6 +20,9 @@ from vllm.distributed import (
+     tensor_model_parallel_reduce_scatter,
+ )
+ from vllm.forward_context import get_forward_context
++from vllm.model_executor.layers.fused_moe import (
++    fused_moe_make_expert_params_mapping,
++)
+ from vllm.model_executor.layers.quantization import QuantizationConfig
+ from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
+ from vllm.model_executor.models.interfaces import (
+@@ -49,6 +52,7 @@ from vllm.sequence import IntermediateTensors
+ from ..configs import InklingMMConfig, InklingModelConfig
+ from ..nvfp4 import InklingNvfp4Config
+ from .attention import InklingAttention, compute_log_scaling_tau
++from .exl3_loading import load_rank_sliced_expert_weight
+ from .layernorm import InklingRMSNorm
+ from .logits_processor import InklingLogitsProcessor
+ from .mlp import InklingDenseMLP
+@@ -179,6 +183,7 @@ class InklingDecoderLayer(nn.Module):
+                 config,
+                 layer_id,
+                 prefix=f"{prefix}.mlp",
++                quant_config=quant_config,
+                 nvfp4_config=nvfp4_config,
+             )
+ 
+@@ -407,6 +412,7 @@ class _TmlForCausalLMBase(nn.Module, SupportsPP, SupportsLoRA):
+         prefix: str,
+     ) -> None:
+         quant_config = vllm_config.quant_config
++        self.quant_config = quant_config
+         self.config = text_config
+         # NVFP4 experts are detected directly from the checkpoint quant config;
+         # only the MoE experts are quantized (attention/dense MLP stay bf16).
+@@ -647,9 +653,30 @@ def _load_inkling_weights(
+     tp_size = get_tensor_model_parallel_world_size()
+     tp_rank = get_tensor_model_parallel_rank()
+     local_ids = set(config.local_layer_ids)
++    params_dict = dict(module.named_parameters())
++    rank_sliced_name = getattr(
++        getattr(module, "quant_config", None),
++        "normalize_rank_sliced_weight_name",
++        None,
++    )
++    expert_params_mapping = (
++        fused_moe_make_expert_params_mapping(
++            module,
++            ckpt_gate_proj_name="gate_proj",
++            ckpt_down_proj_name="down_proj",
++            ckpt_up_proj_name="up_proj",
++            num_experts=config.n_routed_experts,
++        )
++        if rank_sliced_name is not None
++        else ()
++    )
+ 
+     def _iter_loadable_weights() -> Iterable[tuple[str, torch.Tensor]]:
+         for name, weight in module.hf_to_vllm_mapper.apply(weights):
++            if rank_sliced_name is not None:
++                name = rank_sliced_name(name)
++                if name is None:
++                    continue
+             shard_id = getattr(weight, "shard_id", None)
+             # Replicate K/V conv-free GQA heads when tp_size > num_kv_heads.
+             if (
+@@ -676,6 +703,22 @@ def _load_inkling_weights(
+             moe_match = _MOE_EXPERT_WEIGHT_RE.match(name)
+             if moe_match is not None and moe_match.group("mlp") in moe_modules:
+                 moe = moe_modules[moe_match.group("mlp")]
++                if rank_sliced_name is not None and not name.startswith(
++                    f"{moe_match.group('mlp')}.shared_experts."
++                ):
++                    mapped_name = load_rank_sliced_expert_weight(
++                        name,
++                        weight,
++                        params_dict,
++                        expert_params_mapping,
++                    )
++                    if mapped_name is None:
++                        raise ValueError(
++                            "rank-sliced Inkling EXL3 tensor did not map to a "
++                            f"routed-expert parameter: {name}"
++                        )
++                    loaded.add(mapped_name)
++                    continue
+                 for rel in moe.load_expert_weight(moe_match.group("rest"), weight):
+                     loaded.add(f"{moe_match.group('mlp')}.{rel}")
+                 continue
+diff --git a/vllm/models/inkling/nvidia/moe.py b/vllm/models/inkling/nvidia/moe.py
+index 255c9328c8aa38c9447f42c1bebfa1fa7ef8f1b7..4c3d16f6097a0d9da52b5dc299b96c61d2e35d14 100644
+--- a/vllm/models/inkling/nvidia/moe.py
++++ b/vllm/models/inkling/nvidia/moe.py
+@@ -49,6 +49,7 @@ if TYPE_CHECKING:
+     from vllm.model_executor.layers.fused_moe.routed_experts import (
+         RoutedExperts,
+     )
++    from vllm.model_executor.layers.quantization import QuantizationConfig
+ 
+     from ..nvfp4 import InklingNvfp4Config
+ 
+@@ -415,6 +416,7 @@ class InklingMoE(nn.Module):
+         layer_id: int,
+         *,
+         prefix: str = "",
++        quant_config: QuantizationConfig | None = None,
+         nvfp4_config: InklingNvfp4Config | None = None,
+     ) -> None:
+         super().__init__()
+@@ -437,7 +439,12 @@ class InklingMoE(nn.Module):
+         )
+ 
+         moe_quant_config = None
+-        if nvfp4_config is not None and nvfp4_config.experts_quantized(layer_id):
++        if quant_config is not None and quant_config.get_name() == "exl3":
++            # EXL3 owns only the routed experts. The sink experts below remain
++            # BF16, matching both the original checkpoint and the rank-sliced
++            # EXL3 archive contract.
++            moe_quant_config = quant_config
++        elif nvfp4_config is not None and nvfp4_config.experts_quantized(layer_id):
+             from vllm.model_executor.layers.quantization.modelopt import (
+                 ModelOptNvFp4Config,
+             )
+diff --git a/vllm/v1/attention/backends/mla/sparse_swa.py b/vllm/v1/attention/backends/mla/sparse_swa.py
+index 5c23e98d3bb136b3776b1302649e6d3c24897f11..e0d9380211472bacbcc7c87aabec26c72a521c1b 100644
+--- a/vllm/v1/attention/backends/mla/sparse_swa.py
++++ b/vllm/v1/attention/backends/mla/sparse_swa.py
+@@ -82,6 +82,7 @@ class DeepseekV4SWACache(torch.nn.Module, AttentionLayerBase):
+         # fp8_ds_mla's UE8M0 paged layout needs 576B alignment; contiguous
+         # bf16/fp8 cache uses the natural element-size page.
+         uses_fp8_ds_mla_layout = self.cache_config.cache_dtype == "fp8_ds_mla"
++        uses_nvfp4_ds_mla_layout = self.cache_config.cache_dtype == "nvfp4_ds_mla"
+         return SlidingWindowMLASpec(
+             block_size=self.block_size,
+             num_kv_heads=1,
+@@ -90,7 +91,13 @@ class DeepseekV4SWACache(torch.nn.Module, AttentionLayerBase):
+             sliding_window=self.window_size,
+             cache_dtype_str=self.cache_config.cache_dtype,
+             # 576B for FlashMLA packing; 512B for FlashInfer sparse (#44577).
+-            alignment=576 if uses_fp8_ds_mla_layout else 512,
++            alignment=(
++                432
++                if uses_nvfp4_ds_mla_layout
++                else 576
++                if uses_fp8_ds_mla_layout
++                else 512
++            ),
+             model_version="deepseek_v4",
+             kv_quant_mode=get_kv_quant_mode(self.cache_config.cache_dtype),
+         )
+@@ -141,6 +148,8 @@ class DeepseekSparseSWABackend(AttentionBackend):
+             # DeepseekV4 SWA: 584B per token (448 NoPE + 128 RoPE + 8 fp8 scale).
+             # head_size passed in is the semantic head_dim (512).
+             return (num_blocks, block_size, 584)
++        elif cache_dtype_str == "nvfp4_ds_mla":
++            return (num_blocks, block_size, 432)
+         else:
+             return (num_blocks, block_size, head_size)
+ 
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index bfe2fdf28b06a101e740403a6a58d820c8f22e33..68823cdc8eb7e5524f19f18186a686cbc76627f6 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1825,6 +1825,37 @@ def _get_kv_cache_groups_uniform_groups(
+         isinstance(spec, MLAAttentionSpec)
+         for spec in full_mla_spec.kv_cache_specs.values()
+     )
++
++    # DeepSeek V4's compressor state is a 32 KiB physical page. The stock
++    # FP8 MLA record produces a larger C4 page, so it naturally anchors the
++    # shared tensor. NVFP4 shrinks the C4 payload to 27 KiB; pad that physical
++    # page back up to the largest companion page while retaining its 432-byte
++    # logical record and 64-token storage block. Kernels index the logical
++    # payload through storage_block_size and the allocator owns the padding.
++    full_page_sizes = full_mla_spec.get_page_sizes()
++    companion_page_sizes = [
++        page_size
++        for grouped_spec in grouped_specs[1:]
++        for page_size in grouped_spec.get_page_sizes()
++    ]
++    if companion_page_sizes and max(companion_page_sizes) > max(full_page_sizes):
++        old_anchor = max(full_page_sizes)
++        new_anchor = max(companion_page_sizes)
++        nvfp4_anchor_specs = [
++            spec
++            for spec in full_mla_spec.kv_cache_specs.values()
++            if spec.page_size_bytes == old_anchor
++            and spec.cache_dtype_str == "nvfp4_ds_mla"
++            and spec.model_version == "deepseek_v4"
++        ]
++        assert nvfp4_anchor_specs, (
++            "Companion KV page exceeds the full-MLA anchor for an unsupported "
++            f"layout: companion={sorted(set(companion_page_sizes))}, "
++            f"full={sorted(full_page_sizes)}"
++        )
++        for spec in nvfp4_anchor_specs:
++            object.__setattr__(spec, "page_size_padded", new_anchor)
++
+     full_mla_group = KVCacheGroupSpec(
+         layer_names=list(full_mla_spec.kv_cache_specs.keys()),
+         kv_cache_spec=full_mla_spec,
+diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
+index 00ee98ce7a94c54bd5258cc5d2ea137656cdabcf..8b4c4f9dad3ef56296001f67a04463365d4e5758 100644
+--- a/vllm/v1/kv_cache_interface.py
++++ b/vllm/v1/kv_cache_interface.py
+@@ -737,6 +737,8 @@ class SlidingWindowMLASpec(SlidingWindowSpec):
+ 
+     @property
+     def real_page_size_bytes(self) -> int:
++        if self.model_version == "deepseek_v4" and self.cache_dtype_str == "nvfp4_ds_mla":
++            return self.storage_block_size * 432
+         if self.model_version == "deepseek_v4" and self.cache_dtype_str == "fp8_ds_mla":
+             # DeepseekV4 FlashMLA: 448B NoPE + 128B RoPE + 8B fp8 scale = 584B
+             # per token. FlashInfer's contiguous bf16/fp8 cache falls through to
+diff --git a/vllm/models/deepseek_v4/nvidia/exl3_loading.py b/vllm/models/deepseek_v4/nvidia/exl3_loading.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..bb254ebb7bc4491cb576f6d7df2e82ea52700d5c
+--- /dev/null
++++ b/vllm/models/deepseek_v4/nvidia/exl3_loading.py
+@@ -0,0 +1,21 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Dependency-light helpers for DeepSeek V4 rank-sliced EXL3 loading."""
++
++from __future__ import annotations
++
++from collections.abc import Callable, Iterable, Iterator
++from typing import Any
++
++
++def normalize_rank_sliced_weights(
++    weights: Iterable[tuple[str, Any]],
++    normalize: Callable[[str], str | None] | None,
++) -> Iterator[tuple[str, Any]]:
++    """Normalize local TP tensor names and discard non-local rank payloads."""
++    for name, weight in weights:
++        if normalize is not None:
++            name = normalize(name)
++            if name is None:
++                continue
++        yield name, weight
+diff --git a/vllm/models/inkling/nvidia/exl3_loading.py b/vllm/models/inkling/nvidia/exl3_loading.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8abd746fa422b091ef971cdaa35705d143bc5551
+--- /dev/null
++++ b/vllm/models/inkling/nvidia/exl3_loading.py
+@@ -0,0 +1,43 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Dependency-light helpers for Inkling rank-sliced EXL3 weight loading."""
++
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from typing import Any
++
++ExpertMapping = tuple[str, str, int, str]
++
++
++def load_rank_sliced_expert_weight(
++    name: str,
++    weight: Any,
++    params: Mapping[str, Any],
++    mappings: Sequence[ExpertMapping],
++) -> str | None:
++    """Route one normalized per-expert EXL3 tensor into its fused parameter.
++
++    The checkpoint uses ``experts.<id>.<projection>.<field>`` names while
++    ``RoutedExperts`` registers fused ``w13_<field>`` and ``w2_<field>``
++    parameters. The parameter's EXL3 loader records the expert and projection
++    shard without decoding the tensor.
++    """
++    for param_name, weight_name, expert_id, shard_id in mappings:
++        if weight_name not in name:
++            continue
++        mapped_name = name.replace(weight_name, param_name)
++        param = params.get(mapped_name)
++        if param is None:
++            continue
++        success = param.weight_loader(
++            param,
++            weight,
++            mapped_name,
++            shard_id=shard_id,
++            expert_id=expert_id,
++            return_success=True,
++        )
++        if success:
++            return mapped_name
++    return None

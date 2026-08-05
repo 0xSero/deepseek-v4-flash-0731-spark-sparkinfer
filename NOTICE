@@ -1,0 +1,7 @@
+This distribution contains patches against vLLM and SparkInfer, both licensed
+under Apache License 2.0. It packages a serving recipe but does not redistribute
+model weights.
+
+SparkInfer and DGX Spark runtime work: Local Inference Lab contributors.
+EXL3 and Trellis quantization format: TurboDerp and ExLlamaV3 contributors.
+DeepSeek V4 Flash model: DeepSeek contributors.
