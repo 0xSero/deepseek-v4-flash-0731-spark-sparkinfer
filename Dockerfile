@@ -60,7 +60,8 @@ RUN git -C /opt/vllm apply --check /tmp/vllm-build-fetch.patch && \
 
 # Build only the stable vLLM extension needed by EXL3 and the SM12x NVFP4
 # MLA cache writer. This deliberately avoids unrelated heavyweight extensions.
-RUN PATH=/usr/local/bin:${PATH} cmake -S /opt/vllm -B /opt/vllm-build -G Ninja \
+RUN export PATH=/usr/local/bin:${PATH} && \
+    cmake -S /opt/vllm -B /opt/vllm-build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CUDA_ARCHITECTURES=120 \
       -DVLLM_TARGET_DEVICE=cuda \
