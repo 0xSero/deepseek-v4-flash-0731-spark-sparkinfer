@@ -29,11 +29,14 @@ RUN rm -rf /opt/vllm /opt/sparkinfer && \
 
 COPY patches/vllm.patch /tmp/vllm.patch
 COPY patches/vllm-padded-fp8-compat.patch /tmp/vllm-padded-fp8-compat.patch
+COPY patches/vllm-dspark-compact-draft.patch /tmp/vllm-dspark-compact-draft.patch
 COPY patches/sparkinfer.patch /tmp/sparkinfer.patch
 RUN git -C /opt/vllm apply --check /tmp/vllm.patch && \
     git -C /opt/vllm apply /tmp/vllm.patch && \
     git -C /opt/vllm apply --check /tmp/vllm-padded-fp8-compat.patch && \
     git -C /opt/vllm apply /tmp/vllm-padded-fp8-compat.patch && \
+    git -C /opt/vllm apply --check /tmp/vllm-dspark-compact-draft.patch && \
+    git -C /opt/vllm apply /tmp/vllm-dspark-compact-draft.patch && \
     git -C /opt/sparkinfer apply --check /tmp/sparkinfer.patch && \
     git -C /opt/sparkinfer apply /tmp/sparkinfer.patch
 

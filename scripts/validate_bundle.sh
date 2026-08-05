@@ -9,10 +9,12 @@ bash -n "${repo_root}/scripts/entrypoint.sh" \
   "${repo_root}/scripts/healthcheck.sh"
 python3 -m py_compile \
   "${repo_root}/scripts/benchmark.py" \
+  "${repo_root}/scripts/build_dspark_draft.py" \
   "${repo_root}/scripts/coalesce_rank_sliced_exl3.py" \
   "${repo_root}/scripts/selftest.py" \
   "${repo_root}/scripts/verify_tp1_manifest.py"
 python3 -m json.tool "${repo_root}/config/recipe.json" >/dev/null
+python3 -m json.tool "${repo_root}/results/dspark-c1-acceptance.json" >/dev/null
 
 if rg -n --glob '!README.md' --glob '!patches/*.patch' \
   --glob '!scripts/validate_bundle.sh' \
@@ -34,6 +36,10 @@ if [[ -n "${vllm_source}" ]]; then
     "${repo_root}/patches/vllm-padded-fp8-compat.patch"
   git -C "${validation_tree}/vllm" apply \
     "${repo_root}/patches/vllm-padded-fp8-compat.patch"
+  git -C "${validation_tree}/vllm" apply --check \
+    "${repo_root}/patches/vllm-dspark-compact-draft.patch"
+  git -C "${validation_tree}/vllm" apply \
+    "${repo_root}/patches/vllm-dspark-compact-draft.patch"
   git -C "${validation_tree}/vllm" apply --check \
     "${repo_root}/patches/vllm-build-fetch.patch"
 fi

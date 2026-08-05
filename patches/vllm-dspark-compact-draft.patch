@@ -1,0 +1,80 @@
+diff --git a/vllm/models/deepseek_v4/nvidia/dspark.py b/vllm/models/deepseek_v4/nvidia/dspark.py
+index 1d9547c..e073cf8 100644
+--- a/vllm/models/deepseek_v4/nvidia/dspark.py
++++ b/vllm/models/deepseek_v4/nvidia/dspark.py
+@@ -93,16 +93,29 @@ class DSparkDeepseekV4Model(nn.Module):
+         )
+         self.main_norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+ 
++        # The target ModelConfig is already hydrated with runtime-specific
++        # attention/cache padding. Reuse it while constructing the draft
++        # blocks, changing only the routed-expert count for the duration of
++        # construction. Every instantiated MoE owns its resulting dimensions;
++        # restoring immediately keeps the target config and target model intact.
+         current_vllm_config = get_current_vllm_config()
+-        self.layers = nn.ModuleList(
+-            [
+-                DeepseekV4DecoderLayer(
+-                    current_vllm_config,
+-                    prefix=maybe_prefix(prefix, f"layers.{self.num_hidden_layers + i}"),
+-                )
+-                for i in range(self.num_dspark_layers)
+-            ]
+-        )
++        target_hf_config = current_vllm_config.model_config.hf_config
++        target_n_routed_experts = target_hf_config.n_routed_experts
++        target_hf_config.n_routed_experts = config.n_routed_experts
++        try:
++            self.layers = nn.ModuleList(
++                [
++                    DeepseekV4DecoderLayer(
++                        current_vllm_config,
++                        prefix=maybe_prefix(
++                            prefix, f"layers.{self.num_hidden_layers + i}"
++                        ),
++                    )
++                    for i in range(self.num_dspark_layers)
++                ]
++            )
++        finally:
++            target_hf_config.n_routed_experts = target_n_routed_experts
+ 
+         # Heads: final norm + hc_head, and the Markov + confidence heads
+         # Loaded from the "final" MTP layer weights (mtp.*) in the target checkpoint
+diff --git a/vllm/model_executor/layers/fused_moe/router/fused_topk_bias_router.py b/vllm/model_executor/layers/fused_moe/router/fused_topk_bias_router.py
+index 94d65aa..44b94c7 100644
+--- a/vllm/model_executor/layers/fused_moe/router/fused_topk_bias_router.py
++++ b/vllm/model_executor/layers/fused_moe/router/fused_topk_bias_router.py
+@@ -24,7 +24,10 @@ _NATIVE_TOPK_SOFTPLUS_SQRT_EXPERT_COUNTS = frozenset(
+ 
+ def _native_topk_softplus_sqrt_supports(num_experts: int) -> bool:
+     """Whether the compiled CUDA/ROCm launcher has this specialization."""
+-    return num_experts in _NATIVE_TOPK_SOFTPLUS_SQRT_EXPERT_COUNTS
++    return (
++        num_experts in _NATIVE_TOPK_SOFTPLUS_SQRT_EXPERT_COUNTS
++        and hasattr(torch.ops._moe_C, "topk_softplus_sqrt")
++    )
+ 
+ 
+ def vllm_topk_softmax(
+diff --git a/serve-ds4-flash.sh b/serve-ds4-flash.sh
+--- a/serve-ds4-flash.sh
++++ b/serve-ds4-flash.sh
+@@ -278,7 +278,7 @@ elif [[ "${mode}" == "dspark" ]]; then
+         ;;
+     esac
+     draft_attention_json=$(printf \
+-      ',"draft_attention_backend":"%s"' "${draft_attention_backend}")
++      ',"attention_backend":"%s"' "${draft_attention_backend}")
+   fi
+   dspark_capacity=$(bool_value DSPARK_CAPACITY "${DSPARK_CAPACITY:-0}")
+   capacity_json=
+@@ -466,7 +466,7 @@ cmd=(
+   --enable-prompt-tokens-details
+   --enable-force-include-usage
+   --enable-request-id-headers
+-  --default-chat-template-kwargs.thinking=true
++  --default-chat-template-kwargs.thinking=false
+   --default-chat-template-kwargs.reasoning_effort=high
+   "${autotune_args[@]}"
+   "${prefix_args[@]}"

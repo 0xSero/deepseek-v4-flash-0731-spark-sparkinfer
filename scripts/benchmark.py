@@ -22,6 +22,7 @@ def request(
     model: str,
     prompt: str,
     output_tokens: int,
+    thinking: bool = False,
 ) -> dict[str, float | int]:
     payload = json.dumps(
         {
@@ -31,6 +32,7 @@ def request(
             "stream": True,
             "stream_options": {"include_usage": True},
             "max_completion_tokens": output_tokens,
+            "chat_template_kwargs": {"thinking": thinking},
         }
     ).encode()
     started = time.perf_counter()
@@ -86,6 +88,12 @@ def main() -> None:
     parser.add_argument("--model", default="deepseek-v4-flash-0731-spark")
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--prompt-repetitions", type=int, default=2048)
+    parser.add_argument(
+        "--thinking",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="enable DeepSeek reasoning mode (disabled in the speed profile)",
+    )
     args = parser.parse_args()
     prompt = (
         "Study this repeated calibration phrase, then give one concise CUDA tip. "
@@ -103,6 +111,7 @@ def main() -> None:
                     args.model,
                     prompt,
                     args.output_tokens,
+                    args.thinking,
                 )
                 for _ in range(concurrency)
             ]
