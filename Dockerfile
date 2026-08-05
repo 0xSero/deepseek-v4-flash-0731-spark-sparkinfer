@@ -15,7 +15,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN test "$(uname -m)" = aarch64 || \
     (echo "This image targets one DGX Spark (Linux aarch64 + GB10/SM121)." >&2; exit 2)
 
-RUN git clone https://github.com/local-inference-lab/vllm.git /opt/vllm && \
+RUN rm -rf /opt/vllm /opt/sparkinfer && \
+    git clone https://github.com/local-inference-lab/vllm.git /opt/vllm && \
     git -C /opt/vllm checkout --detach "${VLLM_COMMIT}" && \
     git clone https://github.com/local-inference-lab/sparkinfer.git /opt/sparkinfer && \
     git -C /opt/sparkinfer checkout --detach "${SPARKINFER_COMMIT}"
