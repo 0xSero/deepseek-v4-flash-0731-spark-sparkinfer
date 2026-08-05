@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CUDA_HOME=/usr/local/cuda \
     CUTE_DSL_ARCH=sm_121a \
     PYTHONPATH=/opt/vllm:/opt/sparkinfer \
-    PATH=/opt/runtime-venv/bin:/usr/local/cuda/bin:/usr/bin:/bin \
+    PATH=/opt/runtime-venv/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin \
     KV_FP8_ROPE=0 \
     VLLM_DSV4_PADDED_NVFP4=1
 
