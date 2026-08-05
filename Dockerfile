@@ -80,7 +80,10 @@ RUN export PATH=/usr/local/bin:${PATH} && \
 RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       'nvidia-cutlass-dsl-libs-cu13==4.6.0' 'transformers==5.13.1' \
       'mistral-common==1.11.5' 'instanttensor==0.1.5' 'openai==2.44.0' \
-      'compressed-tensors==0.17.0'
+      'compressed-tensors==0.17.0' 'apache-tvm-ffi==0.1.10' \
+      'torch-c-dlpack-ext==0.1.5' 'z3-solver==4.15.4' 'tilelang==0.1.9' && \
+    env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
+      --no-deps 'quack-kernels==0.6.2'
 
 COPY patches/instanttensor.patch /tmp/instanttensor.patch
 RUN patch --dry-run -p1 -d /opt/runtime-venv/lib/python3.12/site-packages \
