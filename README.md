@@ -26,7 +26,7 @@ This image is intentionally specific to Linux aarch64 and GB10/SM121. It exits o
 - `FULL_AND_PIECEWISE` CUDA graphs at batch sizes 1, 2, and 4
 - 584-byte padded FP8 sparse-MLA compatibility record
 
-The two patch files are readable source patches. Docker verifies that each patch applies to its pinned upstream commit before compiling the required vLLM extension.
+The patch files are readable source patches. Docker verifies that each patch applies to its pinned upstream commit before compiling the required vLLM extension. The build-only patch makes vLLM's pinned Triton dependency fetch shallow; it does not change runtime kernels.
 
 ## Run
 

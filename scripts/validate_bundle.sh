@@ -32,6 +32,10 @@ if [[ -n "${vllm_source}" ]]; then
   git -C "${validation_tree}/vllm" apply "${repo_root}/patches/vllm.patch"
   git -C "${validation_tree}/vllm" apply --check \
     "${repo_root}/patches/vllm-padded-fp8-compat.patch"
+  git -C "${validation_tree}/vllm" apply \
+    "${repo_root}/patches/vllm-padded-fp8-compat.patch"
+  git -C "${validation_tree}/vllm" apply --check \
+    "${repo_root}/patches/vllm-build-fetch.patch"
 fi
 if [[ -n "${sparkinfer_source}" ]]; then
   git -C "${sparkinfer_source}" apply --check \

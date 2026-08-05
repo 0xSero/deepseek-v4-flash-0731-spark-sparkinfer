@@ -1,0 +1,11 @@
+diff --git a/cmake/external_projects/triton_kernels.cmake b/cmake/external_projects/triton_kernels.cmake
+--- a/cmake/external_projects/triton_kernels.cmake
++++ b/cmake/external_projects/triton_kernels.cmake
+@@ -19,6 +19,7 @@ else()
+           # TODO (varun) : Fetch just the triton_kernels directory from Triton
+           GIT_REPOSITORY https://github.com/triton-lang/triton.git
+           GIT_TAG ${DEFAULT_TRITON_KERNELS_TAG}
++          GIT_SHALLOW TRUE
+           GIT_PROGRESS TRUE
+           SOURCE_SUBDIR python/triton_kernels/triton_kernels
+   )

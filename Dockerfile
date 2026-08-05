@@ -54,6 +54,10 @@ RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
 
 RUN /opt/runtime-venv/bin/python -m pip install --no-deps -e /opt/sparkinfer
 
+COPY patches/vllm-build-fetch.patch /tmp/vllm-build-fetch.patch
+RUN git -C /opt/vllm apply --check /tmp/vllm-build-fetch.patch && \
+    git -C /opt/vllm apply /tmp/vllm-build-fetch.patch
+
 # Build only the stable vLLM extension needed by EXL3 and the SM12x NVFP4
 # MLA cache writer. This deliberately avoids unrelated heavyweight extensions.
 RUN PATH=/usr/local/bin:${PATH} cmake -S /opt/vllm -B /opt/vllm-build -G Ninja \
