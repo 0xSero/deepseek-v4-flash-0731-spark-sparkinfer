@@ -1,0 +1,239 @@
+diff --git a/vllm/envs.py b/vllm/envs.py
+index 3167a84..86d8661 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -61,6 +61,7 @@ if TYPE_CHECKING:
+     VLLM_USE_B12X_SPARSE_INDEXER: bool = False
+     VLLM_USE_B12X_MHC: bool = False
+     VLLM_USE_B12X_FP8_GEMM: bool = False
++    VLLM_DSV4_PADDED_NVFP4: bool = False
+     VLLM_NVFP4_MLA_DYNAMIC_SCALE: bool = False
+     VLLM_NVFP4_MLA_SCALES_FILE: str = ""
+     VLLM_B12X_ABSORB_BMM: bool = False
+@@ -1121,6 +1122,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
+     # Use b12x for FP4 MoE experts.
+     # This is opt-in while the b12x subsystems are brought over one at a time.
+     "VLLM_USE_B12X_MOE": lambda: bool(int(os.getenv("VLLM_USE_B12X_MOE", "0"))),
++    # Preserve the proven 584-byte FP8 DSV4 cache record while retaining the
++    # NVFP4 allocation/control path. Used for single-Spark compatibility.
++    "VLLM_DSV4_PADDED_NVFP4": lambda: bool(
++        int(os.getenv("VLLM_DSV4_PADDED_NVFP4", "0"))
++    ),
+     "VLLM_NVFP4_MLA_DYNAMIC_SCALE": lambda: bool(
+         int(os.getenv("VLLM_NVFP4_MLA_DYNAMIC_SCALE", "0"))
+     ),
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 99337dc..ed57020 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -7,6 +7,7 @@ DeepseekV4 MLA Attention Layer
+ from abc import ABC, abstractmethod
+ from collections.abc import Callable
+ from contextlib import AbstractContextManager, nullcontext
++import os
+ from typing import TYPE_CHECKING, Any, ClassVar, cast
+ 
+ import torch
+@@ -72,6 +73,11 @@ from vllm.v1.kv_cache_interface import (
+ logger = init_logger(__name__)
+ 
+ 
++def _use_padded_nvfp4_cache() -> bool:
++    """Use the proven 584-byte FP8 record under the NVFP4 cache control path."""
++    return os.getenv("VLLM_DSV4_PADDED_NVFP4", "0") == "1"
++
++
+ def _resolve_dsv4_kv_cache_dtype(
+     use_fp8_ds_mla_layout: bool,
+     kv_cache_dtype: str,
+@@ -93,7 +99,15 @@ def _resolve_dsv4_kv_cache_dtype(
+             f"got {kv_cache_dtype}"
+         )
+         if kv_cache_dtype == "nvfp4_ds_mla":
+-            logger.info_once("Using DeepSeek's 432-byte NVFP4 MLA KV cache format.")
++            if _use_padded_nvfp4_cache():
++                logger.info_once(
++                    "Using DeepSeek's 584-byte padded FP8 MLA compatibility "
++                    "record under nvfp4_ds_mla."
++                )
++            else:
++                logger.info_once(
++                    "Using DeepSeek's 432-byte NVFP4 MLA KV cache format."
++                )
+             return kv_cache_dtype, torch.uint8
+         if kv_cache_dtype != "fp8_ds_mla":
+             if cache_config is not None:
+@@ -374,7 +388,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 rotate=True,
+                 prefix=f"{prefix}.compressor",
+                 k_cache_prefix=self.prefix,
+-                use_fp4_cache=self.kv_cache_dtype == "nvfp4_ds_mla",
++                use_fp4_cache=(
++                    self.kv_cache_dtype == "nvfp4_ds_mla"
++                    and not _use_padded_nvfp4_cache()
++                ),
+             )
+ 
+     def _validate_wo_projection_tensors(self) -> tuple[int, int, int, int]:
+@@ -786,7 +803,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 self.padded_heads,
+                 self.eps,
+                 swa_metadata.block_size,
+-                self.kv_cache_dtype == "nvfp4_ds_mla",
++                (
++                    self.kv_cache_dtype == "nvfp4_ds_mla"
++                    and not _use_padded_nvfp4_cache()
++                ),
+             )
+ 
+         # Plain-row path: the [num_blocks, block_size, 512] cache stores the KV
+@@ -848,7 +868,12 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             compress_ratio=self.compress_ratio,
+             cache_dtype_str=self.kv_cache_dtype,
+             alignment=(
+-                432
++                576
++                if (
++                    self.kv_cache_dtype == "nvfp4_ds_mla"
++                    and _use_padded_nvfp4_cache()
++                )
++                else 432
+                 if self.kv_cache_dtype == "nvfp4_ds_mla"
+                 else 576
+                 if uses_packed_mla_layout
+@@ -1034,7 +1059,10 @@ class DeepseekV4Indexer(nn.Module):
+         self.rope_dim = config.qk_rope_head_dim  # 64
+         self.q_lora_rank = q_lora_rank  # 1536
+         self.compress_ratio = compress_ratio
+-        self.use_fp4_kv = self.vllm_config.attention_config.use_fp4_indexer_cache
++        self.use_fp4_kv = (
++            self.vllm_config.attention_config.use_fp4_indexer_cache
++            and not _use_padded_nvfp4_cache()
++        )
+         logger.info_once(
+             "Using %s indexer cache for Lightning Indexer.",
+             "MXFP4" if self.use_fp4_kv else "FP8",
+diff --git a/vllm/models/deepseek_v4/nvidia/b12x.py b/vllm/models/deepseek_v4/nvidia/b12x.py
+index 7b098fc..f54f2b1 100644
+--- a/vllm/models/deepseek_v4/nvidia/b12x.py
++++ b/vllm/models/deepseek_v4/nvidia/b12x.py
+@@ -57,6 +57,12 @@ def _cdiv(x: int, y: int) -> int:
+ 
+ def _dsv4_b12x_page_nbytes(page_size: int, cache_dtype: str) -> int:
+     if cache_dtype == "nvfp4_ds_mla":
++        if os.getenv("VLLM_DSV4_PADDED_NVFP4", "0") == "1":
++            payload_nbytes = int(page_size) * _DSV4_FP8_CACHE_BYTES_PER_TOKEN
++            return (
++                _cdiv(payload_nbytes, _DSV4_CACHE_PAD_ALIGNMENT_BYTES)
++                * _DSV4_CACHE_PAD_ALIGNMENT_BYTES
++            )
+         return int(page_size) * _DSV4_NVFP4_CACHE_BYTES_PER_TOKEN
+     payload_nbytes = int(page_size) * _DSV4_FP8_CACHE_BYTES_PER_TOKEN
+     return (
+diff --git a/vllm/models/deepseek_v4/sparse_mla.py b/vllm/models/deepseek_v4/sparse_mla.py
+index 623bff0..287c7e2 100644
+--- a/vllm/models/deepseek_v4/sparse_mla.py
++++ b/vllm/models/deepseek_v4/sparse_mla.py
+@@ -3,6 +3,7 @@
+ """DeepSeek-V4 FlashMLA sparse backend, metadata, and metadata builder."""
+ 
+ from dataclasses import dataclass
++import os
+ from typing import Any, ClassVar
+ 
+ import torch
+@@ -46,6 +47,7 @@ class DeepseekV4FlashMLABackend(AttentionBackend):
+     supported_kv_cache_dtypes: ClassVar[list[CacheDType]] = [
+         "auto",
+         "fp8_ds_mla",
++        "nvfp4_ds_mla",
+         "fp8",  # alias for fp8_ds_mla
+     ]
+ 
+@@ -104,6 +106,12 @@ class DeepseekV4FlashMLABackend(AttentionBackend):
+             # DeepseekV4 main MLA: 584B per token (448 NoPE + 128 RoPE + 8 fp8 scale).
+             # head_size passed in is the semantic head_dim (512).
+             return (num_blocks, block_size, 584)
++        elif cache_dtype_str == "nvfp4_ds_mla":
++            if os.getenv("VLLM_DSV4_PADDED_NVFP4", "0") == "1":
++                return (num_blocks, block_size, 584)
++            # DeepSeek V4 NVFP4: 256 B packed E2M1 latent + 32 B E4M3
++            # group scales + 16 B pad + 128 B BF16 RoPE per token.
++            return (num_blocks, block_size, 432)
+         else:
+             return (num_blocks, block_size, head_size)
+ 
+diff --git a/vllm/v1/attention/backends/mla/sparse_swa.py b/vllm/v1/attention/backends/mla/sparse_swa.py
+index e0d9380..99189a0 100644
+--- a/vllm/v1/attention/backends/mla/sparse_swa.py
++++ b/vllm/v1/attention/backends/mla/sparse_swa.py
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ from dataclasses import dataclass, field
++import os
+ from typing import ClassVar, cast
+ 
+ import torch
+@@ -92,7 +93,12 @@ class DeepseekV4SWACache(torch.nn.Module, AttentionLayerBase):
+             cache_dtype_str=self.cache_config.cache_dtype,
+             # 576B for FlashMLA packing; 512B for FlashInfer sparse (#44577).
+             alignment=(
+-                432
++                576
++                if (
++                    uses_nvfp4_ds_mla_layout
++                    and os.getenv("VLLM_DSV4_PADDED_NVFP4", "0") == "1"
++                )
++                else 432
+                 if uses_nvfp4_ds_mla_layout
+                 else 576
+                 if uses_fp8_ds_mla_layout
+@@ -149,6 +155,8 @@ class DeepseekSparseSWABackend(AttentionBackend):
+             # head_size passed in is the semantic head_dim (512).
+             return (num_blocks, block_size, 584)
+         elif cache_dtype_str == "nvfp4_ds_mla":
++            if os.getenv("VLLM_DSV4_PADDED_NVFP4", "0") == "1":
++                return (num_blocks, block_size, 584)
+             return (num_blocks, block_size, 432)
+         else:
+             return (num_blocks, block_size, head_size)
+diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
+index 8b4c4f9..b962008 100644
+--- a/vllm/v1/kv_cache_interface.py
++++ b/vllm/v1/kv_cache_interface.py
+@@ -8,6 +8,7 @@ from collections import Counter
+ from dataclasses import dataclass, fields, replace
+ from enum import Enum, IntEnum
+ from math import prod
++import os
+ from typing import TYPE_CHECKING
+ 
+ import torch
+@@ -67,7 +68,7 @@ def get_kv_quant_mode(kv_cache_dtype: str) -> KVQuantMode:
+         return KVQuantMode.INT8_PER_TOKEN_HEAD
+     if kv_cache_dtype == "fp8_per_token_head":
+         return KVQuantMode.FP8_PER_TOKEN_HEAD
+-    if kv_cache_dtype == "nvfp4":
++    if kv_cache_dtype in ("nvfp4", "nvfp4_ds_mla"):
+         return KVQuantMode.NVFP4
+     if isinstance(kv_cache_dtype, str) and kv_cache_dtype.startswith("fp8"):
+         return KVQuantMode.FP8_PER_TENSOR
+@@ -482,6 +483,8 @@ class MLAAttentionSpec(FullAttentionSpec):
+             # q_head_dim=576) family specs; the writer asserts kv_lora_rank
+             # so a mismatched geometry fails loudly at store time.
+             if self.model_version == "deepseek_v4":
++                if os.getenv("VLLM_DSV4_PADDED_NVFP4", "0") == "1":
++                    return self.storage_block_size * 584
+                 return self.storage_block_size * 432
+             if self.model_version == "glm_fp8_rope":
+                 # GLM-only runtime KV format: the 512-D NVFP4 latent remains
+@@ -738,6 +741,8 @@ class SlidingWindowMLASpec(SlidingWindowSpec):
+     @property
+     def real_page_size_bytes(self) -> int:
+         if self.model_version == "deepseek_v4" and self.cache_dtype_str == "nvfp4_ds_mla":
++            if os.getenv("VLLM_DSV4_PADDED_NVFP4", "0") == "1":
++                return self.storage_block_size * 584
+             return self.storage_block_size * 432
+         if self.model_version == "deepseek_v4" and self.cache_dtype_str == "fp8_ds_mla":
+             # DeepseekV4 FlashMLA: 448B NoPE + 128B RoPE + 8B fp8 scale = 584B

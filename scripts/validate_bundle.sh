@@ -22,7 +22,16 @@ if rg -n --glob '!README.md' --glob '!patches/*.patch' \
 fi
 
 if [[ -n "${vllm_source}" ]]; then
-  git -C "${vllm_source}" apply --check "${repo_root}/patches/vllm.patch"
+  validation_tree=$(mktemp -d)
+  trap 'rm -rf "${validation_tree}"' EXIT
+  git clone --shared --quiet "${vllm_source}" "${validation_tree}/vllm"
+  git -C "${validation_tree}/vllm" checkout --quiet --detach \
+    30038602b71395f481ef4a6edfe4fcf8551d9c15
+  git -C "${validation_tree}/vllm" apply --check \
+    "${repo_root}/patches/vllm.patch"
+  git -C "${validation_tree}/vllm" apply "${repo_root}/patches/vllm.patch"
+  git -C "${validation_tree}/vllm" apply --check \
+    "${repo_root}/patches/vllm-padded-fp8-compat.patch"
 fi
 if [[ -n "${sparkinfer_source}" ]]; then
   git -C "${sparkinfer_source}" apply --check \

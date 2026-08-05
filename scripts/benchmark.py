@@ -55,7 +55,9 @@ def request(
             if choices:
                 delta = choices[0].get("delta") or {}
                 if first_content_at is None and (
-                    delta.get("content") or delta.get("reasoning_content")
+                    delta.get("content")
+                    or delta.get("reasoning")
+                    or delta.get("reasoning_content")
                 ):
                     first_content_at = time.perf_counter()
     ended = time.perf_counter()

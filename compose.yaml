@@ -12,7 +12,7 @@ services:
       MODEL_REVISION: 22f28d32b9b29b4352eaa380ff8c2c170b2847ab
       MAX_MODEL_LEN: "262144"
       MAX_NUM_SEQS: "4"
-      GPU_MEMORY_UTILIZATION: "0.90"
+      GPU_MEMORY_UTILIZATION: "0.95"
     volumes:
       - ./data:/models
       - ./cache:/cache

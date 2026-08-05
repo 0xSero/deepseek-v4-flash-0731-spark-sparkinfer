@@ -9,7 +9,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CUTE_DSL_ARCH=sm_121a \
     PYTHONPATH=/opt/vllm:/opt/sparkinfer \
     PATH=/opt/runtime-venv/bin:/usr/local/cuda/bin:/usr/bin:/bin \
-    KV_FP8_ROPE=0
+    KV_FP8_ROPE=0 \
+    VLLM_DSV4_PADDED_NVFP4=1
 
 RUN test "$(uname -m)" = aarch64 || \
     (echo "This image targets one DGX Spark (Linux aarch64 + GB10/SM121)." >&2; exit 2)
@@ -20,9 +21,12 @@ RUN git clone https://github.com/local-inference-lab/vllm.git /opt/vllm && \
     git -C /opt/sparkinfer checkout --detach "${SPARKINFER_COMMIT}"
 
 COPY patches/vllm.patch /tmp/vllm.patch
+COPY patches/vllm-padded-fp8-compat.patch /tmp/vllm-padded-fp8-compat.patch
 COPY patches/sparkinfer.patch /tmp/sparkinfer.patch
 RUN git -C /opt/vllm apply --check /tmp/vllm.patch && \
     git -C /opt/vllm apply /tmp/vllm.patch && \
+    git -C /opt/vllm apply --check /tmp/vllm-padded-fp8-compat.patch && \
+    git -C /opt/vllm apply /tmp/vllm-padded-fp8-compat.patch && \
     git -C /opt/sparkinfer apply --check /tmp/sparkinfer.patch && \
     git -C /opt/sparkinfer apply /tmp/sparkinfer.patch
 
