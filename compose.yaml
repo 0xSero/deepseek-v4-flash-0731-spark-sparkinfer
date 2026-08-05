@@ -1,0 +1,25 @@
+services:
+  deepseek-v4-flash:
+    build:
+      context: .
+    image: deepseek-v4-flash-0731-spark-sparkinfer:sm121
+    network_mode: host
+    ipc: host
+    shm_size: 16gb
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      MODEL_REPO: 0xSero/deepseek-v4-flash-0731-spark
+      MODEL_REVISION: 22f28d32b9b29b4352eaa380ff8c2c170b2847ab
+      MAX_MODEL_LEN: "262144"
+      MAX_NUM_SEQS: "4"
+      GPU_MEMORY_UTILIZATION: "0.90"
+    volumes:
+      - ./data:/models
+      - ./cache:/cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

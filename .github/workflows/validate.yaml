@@ -1,0 +1,22 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static-and-patches:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Clone pinned sources
+        run: |
+          git clone --filter=blob:none https://github.com/local-inference-lab/vllm.git /tmp/vllm
+          git -C /tmp/vllm checkout 30038602b71395f481ef4a6edfe4fcf8551d9c15
+          git clone --filter=blob:none https://github.com/local-inference-lab/sparkinfer.git /tmp/sparkinfer
+          git -C /tmp/sparkinfer checkout 272a84bd97ce791a1e92d1f3a0da3dd5f3c6565f
+      - name: Validate source bundle
+        run: ./scripts/validate_bundle.sh /tmp/vllm /tmp/sparkinfer

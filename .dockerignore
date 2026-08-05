@@ -1,0 +1,7 @@
+.git
+results
+*.log
+data
+cache
+__pycache__
+*.pyc
