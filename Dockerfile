@@ -16,10 +16,16 @@ RUN test "$(uname -m)" = aarch64 || \
     (echo "This image targets one DGX Spark (Linux aarch64 + GB10/SM121)." >&2; exit 2)
 
 RUN rm -rf /opt/vllm /opt/sparkinfer && \
-    git clone https://github.com/local-inference-lab/vllm.git /opt/vllm && \
-    git -C /opt/vllm checkout --detach "${VLLM_COMMIT}" && \
-    git clone https://github.com/local-inference-lab/sparkinfer.git /opt/sparkinfer && \
-    git -C /opt/sparkinfer checkout --detach "${SPARKINFER_COMMIT}"
+    git init /opt/vllm && \
+    git -C /opt/vllm remote add origin \
+      https://github.com/local-inference-lab/vllm.git && \
+    git -C /opt/vllm fetch --depth=1 origin "${VLLM_COMMIT}" && \
+    git -C /opt/vllm checkout --detach FETCH_HEAD && \
+    git init /opt/sparkinfer && \
+    git -C /opt/sparkinfer remote add origin \
+      https://github.com/local-inference-lab/sparkinfer.git && \
+    git -C /opt/sparkinfer fetch --depth=1 origin "${SPARKINFER_COMMIT}" && \
+    git -C /opt/sparkinfer checkout --detach FETCH_HEAD
 
 COPY patches/vllm.patch /tmp/vllm.patch
 COPY patches/vllm-padded-fp8-compat.patch /tmp/vllm-padded-fp8-compat.patch
