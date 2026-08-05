@@ -22,7 +22,7 @@ This image is intentionally specific to Linux aarch64 and GB10/SM121. It exits o
 - SparkInfer commit `272a84bd97ce791a1e92d1f3a0da3dd5f3c6565f`
 - vLLM Flash Attention FA4 Python source `caaa4eb59845388a20b1f435ecaafb4bd9517ad8`
 - model revision `22f28d32b9b29b4352eaa380ff8c2c170b2847ab`
-- PyTorch `2.12.0+cu130`; CUTLASS DSL `4.6.0`; Transformers `5.13.1`; Mistral Common `1.11.5`; InstantTensor `0.1.5`; OpenAI `2.44.0`; compressed-tensors `0.17.0`; TileLang `0.1.9`; quack-kernels `0.6.2`
+- PyTorch `2.12.0+cu130`; CUTLASS DSL `4.6.0`; Transformers `5.13.1`; Mistral Common `1.11.5`; InstantTensor `0.1.5`; OpenAI `2.44.0`; compressed-tensors `0.17.0`; TileLang `0.1.9`; quack-kernels `0.6.2`; Ninja `1.13.0`
 - TP1; 262,144-token limit; four scheduled sequences
 - `FULL_AND_PIECEWISE` CUDA graphs at batch sizes 1, 2, and 4
 - 584-byte padded FP8 sparse-MLA compatibility record

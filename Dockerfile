@@ -101,6 +101,8 @@ RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
     env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       --no-deps 'quack-kernels==0.6.2'
 
+RUN /opt/runtime-venv/bin/python -m pip install 'ninja==1.13.0'
+
 COPY patches/instanttensor.patch /tmp/instanttensor.patch
 RUN patch --dry-run -p1 -d /opt/runtime-venv/lib/python3.12/site-packages \
       < /tmp/instanttensor.patch && \
