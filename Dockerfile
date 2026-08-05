@@ -40,14 +40,19 @@ RUN git -C /opt/vllm apply --check /tmp/vllm.patch && \
 # The NVIDIA 26.02 image supplies CUDA 13.1 and the remaining vLLM runtime.
 # Pin the ABI used by the validated GB10 build in a separate environment.
 RUN python3 -m venv --system-site-packages /opt/runtime-venv && \
-    /opt/runtime-venv/bin/python -m pip install --upgrade pip && \
-    /opt/runtime-venv/bin/python -m pip install \
+    /opt/runtime-venv/bin/python -m pip install --upgrade pip
+
+RUN /opt/runtime-venv/bin/python -m pip install \
       --index-url https://download.pytorch.org/whl/cu130 \
-      'torch==2.12.0+cu130' 'torchvision==0.27.0+cu130' && \
-    /opt/runtime-venv/bin/python -m pip install \
+      'torch==2.12.0+cu130' 'torchvision==0.27.0+cu130'
+
+# NVIDIA's base image constrains CUTLASS DSL to 4.3.5 globally. The validated
+# SparkInfer build needs 4.6.0, so override that constraint only in this venv.
+RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       'nvidia-cutlass-dsl==4.6.0' 'safetensors==0.8.0' \
-      'huggingface-hub>=0.34,<2' 'pytest==9.1.1' && \
-    /opt/runtime-venv/bin/python -m pip install --no-deps -e /opt/sparkinfer
+      'huggingface-hub>=0.34,<2' 'pytest==9.1.1'
+
+RUN /opt/runtime-venv/bin/python -m pip install --no-deps -e /opt/sparkinfer
 
 # Build only the stable vLLM extension needed by EXL3 and the SM12x NVFP4
 # MLA cache writer. This deliberately avoids unrelated heavyweight extensions.
