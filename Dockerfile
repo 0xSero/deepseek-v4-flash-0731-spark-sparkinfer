@@ -78,7 +78,8 @@ RUN export PATH=/usr/local/bin:${PATH} && \
       /opt/vllm/vllm/_C_stable_libtorch.abi3.so
 
 RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
-      'nvidia-cutlass-dsl-libs-cu13==4.6.0' 'transformers==5.13.1'
+      'nvidia-cutlass-dsl-libs-cu13==4.6.0' 'transformers==5.13.1' \
+      'mistral-common==1.11.5' 'instanttensor==0.1.5'
 
 COPY scripts /opt/recipe/scripts
 COPY config /opt/recipe/config
