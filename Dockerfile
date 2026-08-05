@@ -82,6 +82,12 @@ RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       'mistral-common==1.11.5' 'instanttensor==0.1.5' 'openai==2.44.0' \
       'compressed-tensors==0.17.0'
 
+COPY patches/instanttensor.patch /tmp/instanttensor.patch
+RUN patch --dry-run -p1 -d /opt/runtime-venv/lib/python3.12/site-packages \
+      < /tmp/instanttensor.patch && \
+    patch -p1 -d /opt/runtime-venv/lib/python3.12/site-packages \
+      < /tmp/instanttensor.patch
+
 COPY scripts /opt/recipe/scripts
 COPY config /opt/recipe/config
 RUN chmod +x /opt/recipe/scripts/*.sh
