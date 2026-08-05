@@ -61,6 +61,7 @@ RUN git -C /opt/vllm apply --check /tmp/vllm-build-fetch.patch && \
 # Build only the stable vLLM extension needed by EXL3 and the SM12x NVFP4
 # MLA cache writer. This deliberately avoids unrelated heavyweight extensions.
 RUN export PATH=/usr/local/bin:${PATH} && \
+    export TORCH_CUDA_ARCH_LIST=12.0 && \
     cmake -S /opt/vllm -B /opt/vllm-build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CUDA_ARCHITECTURES=120 \
