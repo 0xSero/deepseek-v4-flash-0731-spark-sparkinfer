@@ -4,6 +4,7 @@
   "model": "0xSero/deepseek-v4-flash-0731-spark",
   "model_revision": "22f28d32b9b29b4352eaa380ff8c2c170b2847ab",
   "served_model_name": "deepseek-v4-flash-0731-spark",
+  "docker_image": "sha256:ff63b9b54d08df16cdc705436fdb59b3c3db4ac57e9591819e8de44ab4f36589",
   "weights_gib": 92.13,
   "max_model_len": 262144,
   "max_num_seqs": 4,
@@ -11,9 +12,9 @@
     "control_dtype": "nvfp4_ds_mla",
     "physical_format": "padded_fp8_compatibility",
     "record_bytes": 584,
-    "available_gib": 12.32,
-    "gpu_tokens": 427223,
-    "max_concurrency_at_262144": 1.63
+    "available_gib": 12.49,
+    "gpu_tokens": 433174,
+    "max_concurrency_at_262144": 1.65
   },
   "cuda_graph": {
     "mode": "FULL_AND_PIECEWISE",
@@ -23,9 +24,9 @@
     "prompt": "What is the capital of France? Answer in one sentence.",
     "content": "The capital of France is Paris.",
     "finish_reason": "stop",
-    "prompt_tokens": 17,
-    "completion_tokens": 53,
-    "elapsed_s": 3.888
+    "prompt_tokens": 16,
+    "completion_tokens": 59,
+    "elapsed_s": 8.118
   },
   "structured_output": {
     "schema": {
@@ -39,9 +40,9 @@
     },
     "parsed": {"city": "Paris", "country": "France"},
     "finish_reason": "stop",
-    "prompt_tokens": 14,
-    "completion_tokens": 150,
-    "elapsed_s": 8.538
+    "prompt_tokens": 13,
+    "completion_tokens": 232,
+    "elapsed_s": 16.86
   },
   "experimental_true_nvfp4": {
     "record_bytes": 432,

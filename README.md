@@ -68,11 +68,11 @@ The acceptance run used a 3,589-token prompt and up to 128 completion tokens. C2
 
 | Concurrency | Aggregate decode | Mean per-request decode | TTFT p50 | Mean prefill |
 |---:|---:|---:|---:|---:|
-| C1 | 20.53 tok/s | 20.53 tok/s | 11.262 s | 318.67 tok/s |
-| C2 | 33.50 tok/s | 17.21 tok/s | 0.913 s | 3,929.26 tok/s |
-| C4 | 61.38 tok/s | 16.11 tok/s | 3.129 s | 1,161.09 tok/s |
+| C1 | 18.94 tok/s | 18.94 tok/s | 7.129 s | 503.44 tok/s |
+| C2 | 31.52 tok/s | 17.90 tok/s | 0.344 s | 10,422.45 tok/s |
+| C4 | 63.70 tok/s | 16.17 tok/s | 0.976 s | 3,683.31 tok/s |
 
-The requested 35–50 tok/s single-stream target was **not** reached. The measured C1 decode rate was 20.53 tok/s. MTP speculative decoding was tested but cannot load because this quantized artifact omits the model's layer-43 MTP tensors, so the recipe fails closed without MTP rather than fabricating that speed claim.
+The requested 35–50 tok/s single-stream target was **not** reached. The exact published image measured 18.94 tok/s at C1. MTP speculative decoding was tested but cannot load because this quantized artifact omits the model's layer-43 MTP tensors, so the recipe fails closed without MTP rather than fabricating that speed claim.
 
 Run the same benchmark:
 
