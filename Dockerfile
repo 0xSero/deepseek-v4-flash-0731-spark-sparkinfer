@@ -77,6 +77,8 @@ RUN export PATH=/usr/local/bin:${PATH} && \
     cp /opt/vllm-build/_C_stable_libtorch.abi3.so \
       /opt/vllm/vllm/_C_stable_libtorch.abi3.so
 
+RUN /opt/runtime-venv/bin/python -m pip install 'transformers==5.13.1'
+
 COPY scripts /opt/recipe/scripts
 COPY config /opt/recipe/config
 RUN chmod +x /opt/recipe/scripts/*.sh

@@ -21,7 +21,7 @@ This image is intentionally specific to Linux aarch64 and GB10/SM121. It exits o
 - Local Inference Lab vLLM commit `30038602b71395f481ef4a6edfe4fcf8551d9c15`
 - SparkInfer commit `272a84bd97ce791a1e92d1f3a0da3dd5f3c6565f`
 - model revision `22f28d32b9b29b4352eaa380ff8c2c170b2847ab`
-- PyTorch `2.12.0+cu130`; CUTLASS DSL `4.6.0`
+- PyTorch `2.12.0+cu130`; CUTLASS DSL `4.6.0`; Transformers `5.13.1`
 - TP1; 262,144-token limit; four scheduled sequences
 - `FULL_AND_PIECEWISE` CUDA graphs at batch sizes 1, 2, and 4
 - 584-byte padded FP8 sparse-MLA compatibility record
