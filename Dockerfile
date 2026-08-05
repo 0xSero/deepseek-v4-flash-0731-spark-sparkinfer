@@ -79,7 +79,8 @@ RUN export PATH=/usr/local/bin:${PATH} && \
 
 RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       'nvidia-cutlass-dsl-libs-cu13==4.6.0' 'transformers==5.13.1' \
-      'mistral-common==1.11.5' 'instanttensor==0.1.5' 'openai==2.44.0'
+      'mistral-common==1.11.5' 'instanttensor==0.1.5' 'openai==2.44.0' \
+      'compressed-tensors==0.17.0'
 
 COPY scripts /opt/recipe/scripts
 COPY config /opt/recipe/config
