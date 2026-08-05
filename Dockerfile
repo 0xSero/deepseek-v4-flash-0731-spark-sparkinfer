@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CUDA_HOME=/usr/local/cuda \
     CUTE_DSL_ARCH=sm_121a \
     PYTHONPATH=/opt/vllm:/opt/sparkinfer \
-    PATH=/opt/runtime-venv/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin \
+    PATH=/opt/runtime-venv/bin:/usr/local/cuda/bin:/usr/bin:/bin \
     KV_FP8_ROPE=0 \
     VLLM_DSV4_PADDED_NVFP4=1
 
@@ -56,7 +56,7 @@ RUN /opt/runtime-venv/bin/python -m pip install --no-deps -e /opt/sparkinfer
 
 # Build only the stable vLLM extension needed by EXL3 and the SM12x NVFP4
 # MLA cache writer. This deliberately avoids unrelated heavyweight extensions.
-RUN cmake -S /opt/vllm -B /opt/vllm-build -G Ninja \
+RUN PATH=/usr/local/bin:${PATH} cmake -S /opt/vllm -B /opt/vllm-build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CUDA_ARCHITECTURES=120 \
       -DVLLM_TARGET_DEVICE=cuda \
