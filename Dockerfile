@@ -102,7 +102,7 @@ RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       --no-deps 'quack-kernels==0.6.2'
 
 ENV PATH=/opt/runtime-venv/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin
-RUN test "$(ninja --version)" = "1.13.0"
+RUN case "$(ninja --version)" in 1.13.0*) ;; *) exit 1 ;; esac
 
 COPY patches/instanttensor.patch /tmp/instanttensor.patch
 RUN patch --dry-run -p1 -d /opt/runtime-venv/lib/python3.12/site-packages \
