@@ -68,6 +68,7 @@ RUN PATH=/usr/local/bin:${PATH} cmake -S /opt/vllm -B /opt/vllm-build -G Ninja \
       -DVLLM_ENABLE_SCALED_MM_C2X=OFF \
       -DVLLM_ENABLE_SM12X_NVFP4=OFF \
       -DVLLM_ENABLE_SM12X_NVFP4_KV=ON \
+      -DVLLM_BUILD_RUNTIME_EXTERNALS=OFF \
       -DVLLM_BUILD_QUTLASS=OFF \
       -DVLLM_BUILD_VLLM_FLASH_ATTN=OFF && \
     cmake --build /opt/vllm-build --target _C_stable_libtorch --parallel 4 && \

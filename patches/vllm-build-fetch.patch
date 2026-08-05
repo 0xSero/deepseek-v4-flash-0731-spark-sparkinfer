@@ -9,3 +9,18 @@ diff --git a/cmake/external_projects/triton_kernels.cmake b/cmake/external_proje
            GIT_PROGRESS TRUE
            SOURCE_SUBDIR python/triton_kernels/triton_kernels
    )
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1444,3 +1444,6 @@
++option(VLLM_BUILD_RUNTIME_EXTERNALS
++  "Fetch and install optional runtime external projects" ON)
++if(VLLM_BUILD_RUNTIME_EXTERNALS)
+ # For CUDA and HIP builds also build the triton_kernels external package.
+ if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")
+     include(cmake/external_projects/triton_kernels.cmake)
+@@ -1465,3 +1468,4 @@ if (VLLM_GPU_LANG STREQUAL "CUDA")
+       include(cmake/external_projects/vllm_flash_attn.cmake)
+     endif()
+ endif ()
++endif()
