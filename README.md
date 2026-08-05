@@ -17,6 +17,7 @@ This image is intentionally specific to Linux aarch64 and GB10/SM121. It exits o
 
 ## Pinned components
 
+- public runtime image `ghcr.io/0xsero/deepseek-v4-flash-0731-spark-sparkinfer@sha256:2e077489a83a0360952828051fe7f7a32c1801e5ce8436d85f7267583d614ff4`
 - `nvcr.io/nvidia/vllm:26.02-py3`
 - Local Inference Lab vLLM commit `30038602b71395f481ef4a6edfe4fcf8551d9c15`
 - SparkInfer commit `272a84bd97ce791a1e92d1f3a0da3dd5f3c6565f`
@@ -41,6 +42,8 @@ One command performs the complete install and launch:
 ```bash
 git clone https://github.com/0xSero/deepseek-v4-flash-0731-spark-sparkinfer.git && cd deepseek-v4-flash-0731-spark-sparkinfer && docker compose up -d
 ```
+
+Compose pulls the public [GHCR package](https://github.com/users/0xSero/packages/container/package/deepseek-v4-flash-0731-spark-sparkinfer) by immutable manifest digest, so no registry login is required and the command cannot silently drift to a different image.
 
 Follow startup with `docker compose logs -f`. Model data and compiled caches persist under `./data` and `./cache`, so restarts do not redownload or rebuild valid artifacts. To build the pinned source image locally instead of pulling GHCR, run `docker build -t deepseek-v4-flash-0731-spark-sparkinfer:local .`.
 

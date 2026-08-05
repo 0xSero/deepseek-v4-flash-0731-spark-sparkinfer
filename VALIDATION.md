@@ -5,6 +5,7 @@ Acceptance is fail-closed and each surface is recorded separately. The evidence 
 | Surface | Status | Evidence |
 |---|---:|---|
 | Repository-built image | Pass | Image started from only target/draft/cache mounts; zero restarts; healthy |
+| Public immutable image | Pass | Anonymous registry request returned HTTP 200 for manifest `sha256:2e077489a83a0360952828051fe7f7a32c1801e5ce8436d85f7267583d614ff4` (12,691 bytes) |
 | Full manifest verification | Pass | 48 tensor files; 106,096,777,512 tensor bytes; checksums enabled |
 | Model identity | Pass | HF revision `22f28d32b9b29b4352eaa380ff8c2c170b2847ab`; served name `deepseek-v4-flash-0731-spark` |
 | Target preservation | Pass | All 216 target experts and the target EXL3/Trellis tensors remain unchanged; the K64 draft is a separate directory |

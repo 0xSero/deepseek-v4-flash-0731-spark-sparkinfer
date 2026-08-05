@@ -1,6 +1,6 @@
 services:
   deepseek-v4-flash:
-    image: ghcr.io/0xsero/deepseek-v4-flash-0731-spark-sparkinfer:dspark-k64-fixed-k5
+    image: ghcr.io/0xsero/deepseek-v4-flash-0731-spark-sparkinfer@sha256:2e077489a83a0360952828051fe7f7a32c1801e5ce8436d85f7267583d614ff4
     pull_policy: always
     restart: unless-stopped
     network_mode: host

@@ -3,6 +3,7 @@
   "hardware": "NVIDIA DGX Spark, one GB10 GPU, SM121",
   "source_commit": "bcdc291794fccbb4b46125172ef4ba025bf484c2",
   "local_image_id": "sha256:08b1c7bbbbd3d395808810b933e05dc1997f4dbec61a858eca3467f0d5f299c5",
+  "published_image": "ghcr.io/0xsero/deepseek-v4-flash-0731-spark-sparkinfer@sha256:2e077489a83a0360952828051fe7f7a32c1801e5ce8436d85f7267583d614ff4",
   "profile": "K64 DSpark, fixed K5, probabilistic draft, thinking=false",
   "checksums": {
     "enabled": true,
