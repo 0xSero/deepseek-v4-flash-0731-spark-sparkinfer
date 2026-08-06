@@ -1,0 +1,43 @@
+{
+  "date": "2026-08-06",
+  "hardware": "NVIDIA DGX Spark, one GB10 GPU, SM121, 128 GB unified memory",
+  "runtime_source_commit": "f32e05fa3740705ccbc1f662d948e9fb8dcac5ff",
+  "acceptance_source_commit": "1728957a03a3a997ca800b980839753e92d2a97b",
+  "local_image_id": "sha256:109b1c57b999c3538ddc7df2ade6f30b1d94ee8f05de89fe725a20d91cf0aeec",
+  "xgrammar": {
+    "version": "0.2.3",
+    "normalize_tool_choice_import": "pass"
+  },
+  "acceptance_c1": {
+    "command": "python3 scripts/acceptance_c1.py --base-url http://127.0.0.1:8036 --model spark --skip-code --skip-prefill",
+    "semantic": "pass",
+    "structured_json_schema": "pass",
+    "required_tool_call": {
+      "status": "pass",
+      "name": "multiply",
+      "arguments": {
+        "a": 17,
+        "b": 19
+      }
+    }
+  },
+  "agent_v1": {
+    "structured_output": {
+      "passed": 6,
+      "total": 6
+    },
+    "tool_calling": {
+      "passed": 6,
+      "total": 6
+    },
+    "exact_instruction_following": {
+      "passed": 5,
+      "total": 6
+    },
+    "overall": {
+      "passed": 17,
+      "total": 18
+    },
+    "unrelated_failure": "Expected the literal false; model returned {\"answer\":false}."
+  }
+}
