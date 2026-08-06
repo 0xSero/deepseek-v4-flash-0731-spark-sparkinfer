@@ -1,9 +1,9 @@
 {
   "date": "2026-08-06",
   "hardware": "NVIDIA DGX Spark, one GB10 GPU, SM121, 128 GB unified memory",
-  "runtime_source_commit": "f32e05fa3740705ccbc1f662d948e9fb8dcac5ff",
+  "runtime_source_commit": "e98e59a9830ae2bc41e66a60acb6b4f09bd07409",
   "acceptance_source_commit": "1728957a03a3a997ca800b980839753e92d2a97b",
-  "local_image_id": "sha256:109b1c57b999c3538ddc7df2ade6f30b1d94ee8f05de89fe725a20d91cf0aeec",
+  "local_image_id": "sha256:8b90c214d85ec1d779a9737aba0a9ed5843d2fb348daa11446e67058e54d3569",
   "xgrammar": {
     "version": "0.2.3",
     "normalize_tool_choice_import": "pass"
