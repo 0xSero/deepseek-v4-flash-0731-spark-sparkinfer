@@ -135,6 +135,59 @@ def token_count(base_url: str, model: str, content: str) -> int:
     return int(response["count"])
 
 
+def required_tool_call(base_url: str, model: str) -> dict[str, Any]:
+    response = post_json(
+        f"{base_url}/v1/chat/completions",
+        {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Call multiply with a=17 and b=19. Do not answer directly."
+                    ),
+                }
+            ],
+            "temperature": 0,
+            "max_completion_tokens": 128,
+            "chat_template_kwargs": {"thinking": False},
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "multiply",
+                        "description": "Multiply two integers.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "a": {"type": "integer"},
+                                "b": {"type": "integer"},
+                            },
+                            "required": ["a", "b"],
+                            "additionalProperties": False,
+                        },
+                    },
+                }
+            ],
+            "tool_choice": "required",
+        },
+    )
+    choices = response.get("choices") or []
+    if len(choices) != 1:
+        raise RuntimeError(f"expected one tool-call choice, got {choices!r}")
+    message = choices[0].get("message") or {}
+    tool_calls = message.get("tool_calls") or []
+    if len(tool_calls) != 1:
+        raise RuntimeError(f"expected one tool call, got {tool_calls!r}")
+    function = tool_calls[0].get("function") or {}
+    arguments = json.loads(function.get("arguments") or "")
+    return {
+        "name": function.get("name"),
+        "arguments": arguments,
+        "finish_reason": choices[0].get("finish_reason"),
+    }
+
+
 def build_exact_prefill_prompt(base_url: str, model: str, target: int) -> str:
     nonce = time.time_ns()
     prefix = (
@@ -226,6 +279,19 @@ def main() -> None:
             "status": "pass" if structured == expected else "fail",
             "parsed": structured,
             **structured_metrics,
+        }
+
+        tool_call = required_tool_call(args.base_url, args.model)
+        tool_call_passed = (
+            tool_call["name"] == "multiply"
+            and tool_call["arguments"] == {"a": 17, "b": 19}
+            and tool_call["finish_reason"] == "tool_calls"
+        )
+        if not tool_call_passed:
+            failures.append(f"tool-call gate failed: {tool_call!r}")
+        result["required_tool_call"] = {
+            "status": "pass" if tool_call_passed else "fail",
+            **tool_call,
         }
 
     if not args.skip_code:
