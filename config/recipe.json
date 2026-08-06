@@ -34,6 +34,7 @@
     "vllm_commit": "30038602b71395f481ef4a6edfe4fcf8551d9c15",
     "sparkinfer_commit": "272a84bd97ce791a1e92d1f3a0da3dd5f3c6565f",
     "torch": "2.12.0+cu130",
-    "nvidia_cutlass_dsl": "4.6.0"
+    "nvidia_cutlass_dsl": "4.6.0",
+    "xgrammar": "0.2.3"
   }
 }
