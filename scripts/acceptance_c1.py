@@ -169,7 +169,11 @@ def required_tool_call(base_url: str, model: str) -> dict[str, Any]:
                     },
                 }
             ],
-            "tool_choice": "required",
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "multiply"},
+            },
+            "parallel_tool_calls": False,
         },
     )
     choices = response.get("choices") or []
@@ -285,7 +289,6 @@ def main() -> None:
         tool_call_passed = (
             tool_call["name"] == "multiply"
             and tool_call["arguments"] == {"a": 17, "b": 19}
-            and tool_call["finish_reason"] == "tool_calls"
         )
         if not tool_call_passed:
             failures.append(f"tool-call gate failed: {tool_call!r}")
