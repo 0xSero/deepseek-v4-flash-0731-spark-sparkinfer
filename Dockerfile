@@ -104,6 +104,18 @@ RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
     env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       --no-deps 'quack-kernels==0.6.2'
 
+# The base image ships xgrammar 0.1.27 in the system dist-packages, but the
+# pinned vLLM commit imports normalize_tool_choice (added in 0.2.x) from
+# vllm/tool_parsers/structural_tag_registry.py, and requirements/common.txt
+# asks for >= 0.2.1. Without this, every request carrying tools= fails with
+# HTTP 500 ImportError, so no agentic client can drive the server. Installed
+# into the venv so it shadows the base image copy; --no-deps keeps pip off the
+# torch 2.12.0+cu130 / cutlass-dsl 4.6.0 ABI pinned above.
+RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
+      --no-deps 'xgrammar==0.2.4' && \
+    /opt/runtime-venv/bin/python -c \
+      'from xgrammar import StructuralTag, normalize_tool_choice'
+
 ENV PATH=/opt/runtime-venv/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin
 RUN case "$(ninja --version)" in 1.13.0*) ;; *) exit 1 ;; esac
 
