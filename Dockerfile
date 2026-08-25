@@ -104,6 +104,13 @@ RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
     env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       --no-deps 'quack-kernels==0.6.2'
 
+# The 26.02 base supplies xgrammar 0.1.27, which predates normalize_tool_choice.
+# vllm/tool_parsers/structural_tag_registry.py imports that symbol at module
+# scope, so every request carrying `tools` fails with HTTP 500. --no-deps keeps
+# the pinned transformers==5.13.1 above intact.
+RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
+      --no-deps 'xgrammar==0.2.4'
+
 ENV PATH=/opt/runtime-venv/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin
 RUN case "$(ninja --version)" in 1.13.0*) ;; *) exit 1 ;; esac
 
