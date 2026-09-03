@@ -102,7 +102,9 @@ RUN env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
       'compressed-tensors==0.17.0' 'apache-tvm-ffi==0.1.10' \
       'torch-c-dlpack-ext==0.1.5' 'z3-solver==4.15.4' 'tilelang==0.1.9' && \
     env -u PIP_CONSTRAINT /opt/runtime-venv/bin/python -m pip install \
-      --no-deps 'quack-kernels==0.6.2'
+      --no-deps 'quack-kernels==0.6.2' 'xgrammar==0.2.3' && \
+    /opt/runtime-venv/bin/python -c \
+      'from xgrammar import normalize_tool_choice'
 
 ENV PATH=/opt/runtime-venv/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin
 RUN case "$(ninja --version)" in 1.13.0*) ;; *) exit 1 ;; esac

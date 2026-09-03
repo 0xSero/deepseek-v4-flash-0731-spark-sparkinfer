@@ -16,6 +16,7 @@ Acceptance is fail-closed and each surface is recorded separately. The evidence 
 | CUDA graphs | Pass | `FULL_AND_PIECEWISE`; fixed K5 verifier capture size 6; eager execution disabled |
 | Semantic generation | Pass | Deterministic arithmetic returned the correct result `17 × 19 = 323` |
 | JSON-schema output | Pass | Exact parsed object `{"language":"Python","answer":323,"valid":true}` |
+| Required tool call | Pass | PR #2 image returned one `multiply` call with exact arguments `{"a":17,"b":19}` |
 | 500–20,000-character coherence | Pass | Exact beginning/middle/end fact and checksum recovery at 500, 2k, 5k, 10k, and 20k characters; strict schema and `stop` at every size |
 | C1 code decode | **Optimization pending** | Five 512-token clean-image trials; minimum 34.30, median 38.12, mean 39.49 tok/s |
 | Cold C1 prefill | Candidate pass; release rerun pending | Same runtime path measured 252,047 uncached tokens at 1,055.45 tok/s before clean packaging |
@@ -24,6 +25,14 @@ Acceptance is fail-closed and each surface is recorded separately. The evidence 
 | Experimental 432-byte full generation | **Rejected** | The server booted but generated corrupted text; this route is disabled |
 
 The machine-readable clean-image records are [`results/clean-image-acceptance.json`](results/clean-image-acceptance.json) and [`results/context-coherence.json`](results/context-coherence.json). [`results/dspark-c1-acceptance.json`](results/dspark-c1-acceptance.json) is the earlier tuning candidate. The older `acceptance.json`, `c1-c2-c4.json`, and thermal CSV record the original non-speculative baseline and are retained as provenance, not current release claims.
+
+The XGrammar dependency correction in PR #2 was rebuilt from source and tested
+on the same physical GB10 class on 2026-08-06. The image contained XGrammar
+`0.2.3`, imported `normalize_tool_choice`, and passed semantic generation,
+strict JSON schema, and the new required tool-call gate. A separate 18-case
+agent regression passed all six structured-output cases, all six tool-call
+cases, and five of six exact-instruction cases. The machine-readable summary is
+[`results/tool-calling-fix.json`](results/tool-calling-fix.json).
 
 ## Performance gate
 
@@ -55,4 +64,4 @@ The 432-byte E2M1 implementation remains available for low-level research and pa
 
 ## Release gate
 
-Docker packaging acceptance requires the repository-built image to start without runtime edits, verify source weights, report the documented model/KV/graph configuration, pass semantic generation and strict JSON schema, remain healthy with zero restarts, and be remotely pullable by digest. Performance acceptance remains a separate gate and is still open where explicitly marked above.
+Docker packaging acceptance requires the repository-built image to start without runtime edits, verify source weights, report the documented model/KV/graph configuration, pass semantic generation, strict JSON schema, and required tool calling, remain healthy with zero restarts, and be remotely pullable by digest. Performance acceptance remains a separate gate and is still open where explicitly marked above.
